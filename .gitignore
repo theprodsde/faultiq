@@ -1,10 +1,14 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
 #node modules
 node_modules/
 .next/
 
 #go files
 **/bin/
-**/pkg/
+services/*/pkg/
 **/vendor/
 
 .pptx

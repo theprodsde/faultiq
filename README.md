@@ -176,6 +176,14 @@ Three ready-to-import templates for common architectures:
 
 ---
 
+## Support the Project
+
+If FaultIQ has saved you debugging time, consider buying me a coffee — it helps keep the project alive.
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/theprodsde)
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). We welcome bug reports, feature requests, SOP playbook improvements, and pull requests.
