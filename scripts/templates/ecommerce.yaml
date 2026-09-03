@@ -1,0 +1,134 @@
+version: "1"
+# ─────────────────────────────────────────────────────────────────────────────
+# TechGraph Project Template: E-Commerce Platform
+# 12 services — api-gateway, user, product, cart, order, payment,
+#               inventory, notification, search, users-db, products-db,
+#               orders-db, redis, stripe
+#
+# HOW TO USE
+#   1. Replace YOUR_TENANT_ID with the tenant slug from your Keycloak JWT.
+#   2. Replace healthUrl values with your real service endpoints (or keep
+#      the demo-services URLs to test with the running local demo stack).
+#   3. Uncomment the repo: lines and point them at your GitHub/GitLab repos
+#      for code-level root-cause analysis (shows which commit caused a fault).
+#   4. Import via the UI: Dashboard → Project → Re-import → paste this file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+projects:
+  - id: proj-ecommerce-prod
+    name: E-Commerce Platform
+    namespace: ecommerce:prod
+    tenant: YOUR_TENANT_ID        # replace with your tenant slug
+    environment: prod
+    services:
+
+      # ── Entry point ──────────────────────────────────────────────────────
+      - id: svc_api_gateway
+        name: api-gateway
+        type: GATEWAY
+        # Real: healthUrl: http://api-gateway.svc.cluster.local/health
+        healthUrl: http://demo-services:8091/services/api-gateway/health
+        # repo: https://github.com/your-org/api-gateway
+        calls: [svc_user, svc_product, svc_cart, svc_order, svc_search]
+        tags: [public-facing, ingress]
+
+      # ── Domain services ──────────────────────────────────────────────────
+      - id: svc_user
+        name: user-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/user-service/health
+        # repo: https://github.com/your-org/user-service
+        calls: [db_users, cache_redis]
+
+      - id: svc_product
+        name: product-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/product-service/health
+        # repo: https://github.com/your-org/product-service
+        calls: [db_products, cache_redis]
+
+      - id: svc_cart
+        name: cart-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/cart-service/health
+        # repo: https://github.com/your-org/cart-service
+        calls: [svc_product, cache_redis]
+
+      - id: svc_order
+        name: order-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/order-service/health
+        # repo: https://github.com/your-org/order-service
+        calls: [svc_cart, svc_payment, svc_inventory, svc_notification, db_orders]
+        thresholds:
+          errorRateThreshold: 0.002   # orders are revenue-critical — alert faster
+          latencyThresholdMs: 800
+
+      - id: svc_payment
+        name: payment-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/payment-service/health
+        # repo: https://github.com/your-org/payment-service
+        calls: [db_orders, ext_stripe]
+        thresholds:
+          errorRateThreshold: 0.001   # payment failures are critical — very tight SLO
+          latencyThresholdMs: 1200
+          minSignalCount: 2
+
+      - id: svc_inventory
+        name: inventory-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/inventory-service/health
+        # repo: https://github.com/your-org/inventory-service
+        calls: [db_products, cache_redis]
+
+      - id: svc_notification
+        name: notification-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/notification-service/health
+        # repo: https://github.com/your-org/notification-service
+        calls: [cache_redis]
+
+      - id: svc_search
+        name: search-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/search-service/health
+        # repo: https://github.com/your-org/search-service
+        calls: [db_products, cache_redis]
+
+      # ── Data stores ──────────────────────────────────────────────────────
+      - id: db_users
+        name: users-db
+        type: DATABASE
+        # Real: healthUrl: tcp://postgres-users:5432
+        healthUrl: http://demo-services:8091/services/users-db/health
+        timeoutSeconds: 3
+
+      - id: db_products
+        name: products-db
+        type: DATABASE
+        healthUrl: http://demo-services:8091/services/products-db/health
+        timeoutSeconds: 3
+
+      - id: db_orders
+        name: orders-db
+        type: DATABASE
+        healthUrl: http://demo-services:8091/services/orders-db/health
+        timeoutSeconds: 3
+
+      - id: cache_redis
+        name: redis-cache
+        type: DATABASE
+        # Real: healthUrl: tcp://redis:6379
+        healthUrl: http://demo-services:8091/services/redis-cache/health
+
+      # ── External APIs ─────────────────────────────────────────────────────
+      - id: ext_stripe
+        name: stripe-api
+        type: EXTERNAL
+        healthUrl: http://demo-services:8091/services/stripe-api/health
+        # Real endpoint:
+        # healthUrl: https://status.stripe.com/api/v2/status.json
+        # healthCheck:
+        #   bodyFormat: none
+        #   expectedStatus: [200]

@@ -1,0 +1,114 @@
+version: "1"
+
+# Demo service map — used by both onboarding-worker (graph topology) and health-poller (autonomous fault detection).
+# The healthUrl entries point at the demo-services container which simulates configurable service health.
+# To use real services, replace healthUrl with your actual health endpoint.
+
+projects:
+  - id: proj-payments-prod
+    name: Payments Platform
+    namespace: payments-platform:prod
+    tenant: acme-corp
+    environment: prod
+    services:
+      - id: svc_api_gateway
+        name: api-gateway
+        type: GATEWAY
+        healthUrl: http://demo-services:8091/services/api-gateway/health
+        calls: [svc_payment_api, svc_auth_service]
+        tags: [public-facing, ingress]
+
+      - id: svc_payment_api
+        name: payment-api
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/payment-api/health
+        calls: [svc_ledger_service, svc_auth_service, ext_stripe, db_redis_cache]
+
+      - id: svc_auth_service
+        name: auth-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/auth-service/health
+        calls: [db_redis_cache]
+
+      - id: svc_ledger_service
+        name: ledger-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/ledger-service/health
+        calls: [db_postgres, queue_ledger_events]
+
+      - id: svc_settlement_worker
+        name: settlement-worker
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/settlement-worker/health
+        calls: [svc_ledger_service, queue_ledger_events]
+
+      - id: svc_notification_service
+        name: notification-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/notification-service/health
+        calls: []
+
+      - id: db_postgres
+        name: postgres-db
+        type: DATABASE
+        healthUrl: http://demo-services:8091/services/postgres-db/health
+
+      - id: db_redis_cache
+        name: redis-cache
+        type: DATABASE
+        healthUrl: http://demo-services:8091/services/redis-cache/health
+
+      - id: queue_ledger_events
+        name: ledger-events-topic
+        type: QUEUE
+        healthUrl: http://demo-services:8091/services/ledger-events-topic/health
+
+      - id: ext_stripe
+        name: stripe-api
+        type: EXTERNAL
+        healthUrl: http://demo-services:8091/services/stripe-api/health
+
+  - id: proj-orders-prod
+    name: Orders Platform
+    namespace: orders-platform:prod
+    tenant: acme-corp
+    environment: prod
+    services:
+      - id: svc_order_api
+        name: order-api
+        type: GATEWAY
+        healthUrl: http://demo-services:8091/services/order-api/health
+        calls: [svc_order_service]
+
+      - id: svc_order_service
+        name: order-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/order-service/health
+        calls: [svc_inventory_service, ext_shipping_api, queue_order_events]
+
+      - id: svc_inventory_service
+        name: inventory-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/inventory-service/health
+        calls: [db_orders_postgres]
+
+      - id: svc_warehouse_service
+        name: warehouse-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/warehouse-service/health
+        calls: [queue_order_events, db_orders_postgres]
+
+      - id: db_orders_postgres
+        name: orders-postgres
+        type: DATABASE
+        healthUrl: http://demo-services:8091/services/orders-postgres/health
+
+      - id: ext_shipping_api
+        name: shipping-api
+        type: EXTERNAL
+        healthUrl: http://demo-services:8091/services/shipping-api/health
+
+      - id: queue_order_events
+        name: order-events-topic
+        type: QUEUE
+        healthUrl: http://demo-services:8091/services/order-events-topic/health

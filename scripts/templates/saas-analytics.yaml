@@ -1,0 +1,99 @@
+version: "1"
+# ─────────────────────────────────────────────────────────────────────────────
+# TechGraph Project Template: SaaS Analytics Platform
+# 8 services — api-gateway, data-collector, event-processor, aggregation-service,
+#              reporting-api, dashboard-ui, timeseries-db, redis-cache
+#
+# This topology models a classic data pipeline:
+#   client events → data-collector → event-processor → aggregation-service
+#   aggregation-service → timeseries-db
+#   reporting-api reads timeseries-db for dashboard queries
+#   dashboard-ui calls reporting-api → api-gateway
+#
+# HOW TO USE
+#   1. Replace YOUR_TENANT_ID with your Keycloak tenant slug.
+#   2. Replace healthUrl values with real endpoints or keep demo-services URLs.
+#   3. Uncomment repo: fields for code-level RCA.
+# ─────────────────────────────────────────────────────────────────────────────
+
+projects:
+  - id: proj-analytics-prod
+    name: SaaS Analytics Platform
+    namespace: analytics:prod
+    tenant: YOUR_TENANT_ID
+    environment: prod
+    services:
+
+      # ── Entry point ──────────────────────────────────────────────────────
+      - id: svc_api_gateway
+        name: api-gateway
+        type: GATEWAY
+        healthUrl: http://demo-services:8091/services/api-gateway/health
+        # repo: https://github.com/your-org/api-gateway
+        calls: [svc_data_collector, svc_reporting_api, svc_dashboard_ui]
+        tags: [public-facing, ingress]
+
+      # ── Ingestion pipeline ───────────────────────────────────────────────
+      - id: svc_data_collector
+        name: data-collector
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/data-collector/health
+        # repo: https://github.com/your-org/data-collector
+        calls: [svc_event_processor, cache_redis]
+        # data-collector is the pipeline entry — tight latency SLO
+        thresholds:
+          errorRateThreshold: 0.005
+          latencyThresholdMs: 200
+
+      - id: svc_event_processor
+        name: event-processor
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/event-processor/health
+        # repo: https://github.com/your-org/event-processor
+        calls: [svc_aggregation, cache_redis]
+        thresholds:
+          errorRateThreshold: 0.005
+          latencyThresholdMs: 500
+
+      - id: svc_aggregation
+        name: aggregation-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/aggregation-service/health
+        # repo: https://github.com/your-org/aggregation-service
+        calls: [db_timeseries, cache_redis]
+        thresholds:
+          errorRateThreshold: 0.01
+          latencyThresholdMs: 1000
+
+      # ── Query / presentation layer ────────────────────────────────────────
+      - id: svc_reporting_api
+        name: reporting-api
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/reporting-api/health
+        # repo: https://github.com/your-org/reporting-api
+        calls: [db_timeseries, cache_redis]
+        thresholds:
+          errorRateThreshold: 0.01
+          latencyThresholdMs: 3000    # reporting queries are allowed more time
+
+      - id: svc_dashboard_ui
+        name: dashboard-ui
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/dashboard-ui/health
+        # repo: https://github.com/your-org/dashboard-ui
+        calls: [svc_reporting_api]
+
+      # ── Data stores ──────────────────────────────────────────────────────
+      - id: db_timeseries
+        name: timeseries-db
+        type: DATABASE
+        # Real: healthUrl: http://influxdb:8086/health
+        # or:   healthUrl: tcp://victoriametrics:8428
+        healthUrl: http://demo-services:8091/services/timeseries-db/health
+        timeoutSeconds: 5
+
+      - id: cache_redis
+        name: redis-cache
+        type: DATABASE
+        # Real: healthUrl: tcp://redis:6379
+        healthUrl: http://demo-services:8091/services/redis-cache/health

@@ -1,0 +1,26 @@
+[
+  {
+    "username": "superadmin",
+    "displayName": "Super Admin",
+    "password": "superadmin",
+    "roles": ["superadmin"]
+  },
+  {
+    "username": "orgadmin@acme.com",
+    "displayName": "Org Admin",
+    "password": "orgadmin",
+    "roles": ["org_admin"]
+  },
+  {
+    "username": "projectadmin@acme.com",
+    "displayName": "Project Admin",
+    "password": "projectadmin",
+    "roles": ["project_admin"]
+  },
+  {
+    "username": "readonly@acme.com",
+    "displayName": "Read Only",
+    "password": "readonly",
+    "roles": ["read_only"]
+  }
+]

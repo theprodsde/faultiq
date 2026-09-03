@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go-build-and-test:
+    name: Go — Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"   # always matches developer environment
+          cache: true
+
+      - name: Verify go.mod consistency
+        # Fail if go.sum is out of sync (catches missing go.sum entries)
+        run: |
+          for svc in detection-engine api-gateway rca-ranker signal-ingestion graph-manager \
+                     code-indexer onboarding-worker health-poller k8s-connector; do
+            echo "Checking $svc go.mod..."
+            (cd services/$svc && go mod verify) || exit 1
+          done
+
+      - name: Build all Go services
+        run: |
+          for svc in detection-engine api-gateway rca-ranker signal-ingestion graph-manager \
+                     code-indexer onboarding-worker demo-services health-poller \
+                     recommendation k8s-connector otel-receiver; do
+            echo "Building $svc..."
+            (cd services/$svc && go build ./...) || exit 1
+          done
+
+      - name: Run Go tests
+        run: |
+          for svc in detection-engine api-gateway rca-ranker signal-ingestion; do
+            echo "Testing $svc..."
+            (cd services/$svc && go test ./... -timeout 60s -race) || exit 1
+          done
+
+      - name: Run go vet
+        run: |
+          for svc in detection-engine api-gateway signal-ingestion; do
+            echo "Vetting $svc..."
+            (cd services/$svc && go vet ./...)
+          done
+
+  frontend:
+    name: Frontend — TypeScript & Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: TypeScript type check
+        run: cd frontend && npx tsc --noEmit
+
+      - name: Check for vulnerabilities
+        # Fail on high/critical — these must be fixed before merging
+        run: cd frontend && npm audit --audit-level=high

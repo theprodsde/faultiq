@@ -1,0 +1,229 @@
+/* ─── Tailwind v4 entry point ─────────────────────────────────── */
+@import "tailwindcss";
+
+/* ─── Design tokens via @theme (maps CSS vars → Tailwind utilities) */
+@theme {
+  /* Brand blues */
+  --color-primary-950: #0f3d5e;
+  --color-primary-900: #1b4965;
+  --color-primary-800: #2c699a;
+  --color-primary-700: #468faf;
+  --color-primary-600: #5ba3c4;
+  --color-primary-500: #6eb8d9;
+  --color-primary-400: #8cc5e0;
+  --color-primary-300: #aad2e7;
+  --color-primary-200: #c8dff0;
+  --color-primary-100: #e6edf7;
+
+  /* Accent greens */
+  --color-accent-950: #3d5a1a;
+  --color-accent-900: #5f7d2f;
+  --color-accent-800: #76c893;
+  --color-accent-700: #a7c957;
+  --color-accent-600: #b5e48c;
+  --color-accent-500: #c3edbf;
+
+  /* Semantic surface tokens (light, overridden in dark) */
+  --color-background: #f8fafc;
+  --color-foreground: #0f1419;
+  --color-card: #ffffff;
+  --color-card-border: #e2e8f0;
+  --color-input-bg: #f1f5f9;
+  --color-input-border: #cbd5e1;
+
+  /* Status */
+  --color-success:  #10b981;
+  --color-warning:  #f59e0b;
+  --color-danger:   #ef4444;
+  --color-info:     #3b82f6;
+}
+
+/* ─── CSS variable aliases (for inline var() references) ────────── */
+:root {
+  --background:    #f8fafc;
+  --foreground:    #0f1419;
+  --primary-950:   #0f3d5e;
+  --primary-900:   #1b4965;
+  --primary-800:   #2c699a;
+  --primary-700:   #468faf;
+  --accent-900:    #5f7d2f;
+  --accent-800:    #76c893;
+  --accent-700:    #a7c957;
+  --card-bg:       #ffffff;
+  --card-border:   #e2e8f0;
+  --input-bg:      #f1f5f9;
+  --input-border:  #cbd5e1;
+}
+
+/* ─── Dark Mode ───────────────────────────────────────────────── */
+.dark {
+  --background:    #081018;
+  --foreground:    #ecf0f6;
+  --card-bg:       #0b1724;
+  --card-border:   #1e3a52;
+  --input-bg:      #132238;
+  --input-border:  #243b5c;
+
+  /* Override @theme semantic tokens for dark mode */
+  --color-background:   #081018;
+  --color-foreground:   #ecf0f6;
+  --color-card:         #0b1724;
+  --color-card-border:  #1e3a52;
+  --color-input-bg:     #132238;
+  --color-input-border: #243b5c;
+}
+
+/* Base Styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  transition: background-color 200ms ease, color 200ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Ensure Tailwind v4 dark variant works with class strategy */
+@variant dark (&:where(.dark, .dark *));
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--input-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--input-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-700);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--primary-700);
+  color: #ffffff;
+}
+
+/* Focus */
+:focus-visible {
+  outline: none;
+  ring: 2px var(--primary-700);
+  ring-offset: 2px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideInDown {
+  from {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+/* Utility Classes */
+.animate-fade-in {
+  animation: fadeIn 300ms ease-out;
+}
+
+.animate-slide-in-down {
+  animation: slideInDown 300ms ease-out;
+}
+
+.animate-slide-in-up {
+  animation: slideInUp 300ms ease-out;
+}
+
+.animate-pulse-custom {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Glass Morphism */
+.glass {
+  backdrop-filter: blur(12px);
+  background-color: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.glass-dark {
+  backdrop-filter: blur(12px);
+  background-color: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Gradient Backgrounds */
+.gradient-primary {
+  background: linear-gradient(135deg, var(--primary-900) 0%, var(--primary-700) 100%);
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, var(--accent-700) 0%, var(--accent-800) 100%);
+}
+
+.gradient-glow {
+  background: linear-gradient(180deg, rgba(167, 201, 87, 0.2) 0%, transparent 100%);
+}
+
+/* Cards */
+.card {
+  border-radius: 0.5rem;
+  border: 1px solid;
+  border-color: var(--card-border);
+  background-color: var(--card-bg);
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: all 200ms;
+}
+
+.card:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  border-color: var(--primary-700);
+}
+
+.card-elevated {
+  border-radius: 0.75rem;
+  border: none;
+  background-color: var(--card-bg);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* Input Fields — baseline only, components override with Tailwind */
+input:focus, textarea:focus, select:focus {
+  outline: none;
+}

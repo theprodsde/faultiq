@@ -1,0 +1,135 @@
+version: "1"
+# ─────────────────────────────────────────────────────────────────────────────
+# TechGraph Project Template: Fintech / Payments Platform
+# 11 services — api-gateway, auth-service, payment-processor, fraud-detection,
+#               ledger-service, settlement-worker, notification-service,
+#               audit-log, postgres-primary, redis-cache, ext-stripe
+#
+# Key topology pattern in fintech:
+#   • EVERY service calls auth-service for JWT validation on every request.
+#   • payment-processor → fraud-detection (synchronous pre-auth check)
+#   • All mutations flow through audit-log (compliance requirement).
+#   • payment-processor and ledger-service have the tightest error SLOs.
+#
+# HOW TO USE
+#   1. Replace YOUR_TENANT_ID with your Keycloak tenant slug.
+#   2. Replace healthUrl values with real endpoints or keep demo-services URLs.
+#   3. Uncomment repo: fields for code-level RCA on payment incidents.
+# ─────────────────────────────────────────────────────────────────────────────
+
+projects:
+  - id: proj-fintech-prod
+    name: Fintech Payments Platform
+    namespace: payments:prod
+    tenant: YOUR_TENANT_ID
+    environment: prod
+    services:
+
+      # ── Entry point ──────────────────────────────────────────────────────
+      - id: svc_api_gateway
+        name: api-gateway
+        type: GATEWAY
+        healthUrl: http://demo-services:8091/services/api-gateway/health
+        # repo: https://github.com/your-org/api-gateway
+        calls: [svc_auth, svc_payment_processor]
+        tags: [public-facing, ingress, pci-scope]
+
+      # ── Auth (called by every service) ────────────────────────────────────
+      - id: svc_auth
+        name: auth-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/auth-service/health
+        # repo: https://github.com/your-org/auth-service
+        calls: [cache_redis]
+        # auth is the single point of JWT validation — very tight SLO
+        thresholds:
+          errorRateThreshold: 0.001
+          latencyThresholdMs: 100
+          minSignalCount: 2
+
+      # ── Core payment flow ─────────────────────────────────────────────────
+      - id: svc_payment_processor
+        name: payment-processor
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/payment-processor/health
+        # repo: https://github.com/your-org/payment-processor
+        calls: [svc_auth, svc_fraud_detection, svc_ledger, svc_audit_log, ext_stripe]
+        tags: [pci-scope, revenue-critical]
+        thresholds:
+          errorRateThreshold: 0.001   # payment errors are revenue loss
+          latencyThresholdMs: 2000
+          minSignalCount: 2
+
+      - id: svc_fraud_detection
+        name: fraud-detection
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/fraud-detection/health
+        # repo: https://github.com/your-org/fraud-detection
+        calls: [svc_auth, cache_redis, db_postgres]
+        tags: [pci-scope]
+        thresholds:
+          errorRateThreshold: 0.002
+          latencyThresholdMs: 500    # must complete before payment is authorised
+
+      - id: svc_ledger
+        name: ledger-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/ledger-service/health
+        # repo: https://github.com/your-org/ledger-service
+        calls: [svc_auth, svc_audit_log, db_postgres]
+        tags: [pci-scope, double-entry]
+        thresholds:
+          errorRateThreshold: 0.001   # ledger consistency is non-negotiable
+          latencyThresholdMs: 400
+
+      - id: svc_settlement_worker
+        name: settlement-worker
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/settlement-worker/health
+        # repo: https://github.com/your-org/settlement-worker
+        calls: [svc_auth, svc_ledger, svc_notification, svc_audit_log]
+        thresholds:
+          errorRateThreshold: 0.002
+          latencyThresholdMs: 5000   # batch settlement is slower but must not fail
+
+      - id: svc_notification
+        name: notification-service
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/notification-service/health
+        # repo: https://github.com/your-org/notification-service
+        calls: [svc_auth, cache_redis]
+
+      - id: svc_audit_log
+        name: audit-log
+        type: SERVICE
+        healthUrl: http://demo-services:8091/services/audit-log/health
+        # repo: https://github.com/your-org/audit-log
+        calls: [db_postgres]
+        tags: [compliance, immutable]
+        thresholds:
+          errorRateThreshold: 0.0005  # audit log must never drop events
+          latencyThresholdMs: 200
+
+      # ── Data stores ──────────────────────────────────────────────────────
+      - id: db_postgres
+        name: postgres-primary
+        type: DATABASE
+        # Real: healthUrl: tcp://postgres-primary:5432
+        healthUrl: http://demo-services:8091/services/postgres-db/health
+        timeoutSeconds: 3
+
+      - id: cache_redis
+        name: redis-cache
+        type: DATABASE
+        # Real: healthUrl: tcp://redis:6379
+        healthUrl: http://demo-services:8091/services/redis-cache/health
+
+      # ── External APIs ─────────────────────────────────────────────────────
+      - id: ext_stripe
+        name: ext-stripe
+        type: EXTERNAL
+        # Real: healthUrl: https://status.stripe.com/api/v2/status.json
+        healthUrl: http://demo-services:8091/services/stripe-api/health
+        # healthCheck:
+        #   bodyFormat: none
+        #   expectedStatus: [200]

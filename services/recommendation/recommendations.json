@@ -1,0 +1,51 @@
+{
+  "high-error-rate": [
+    {"id": "check-deployment", "title": "Check recent deployments — correlate error spike with deploy time"},
+    {"id": "review-logs", "title": "Review application logs for new exception patterns"},
+    {"id": "rollback-deploy", "title": "Roll back last deployment if correlated"},
+    {"id": "check-dependencies", "title": "Verify external dependencies (DB, cache, APIs) are healthy"}
+  ],
+  "timeout-burst": [
+    {"id": "check-connection-pool", "title": "Check connection pool utilization and thread saturation"},
+    {"id": "identify-bottleneck", "title": "Identify slow downstream calls via distributed traces"},
+    {"id": "enable-circuit-breaker", "title": "Enable circuit breaker with 50% failure rate threshold"},
+    {"id": "scale-up", "title": "Scale up instances or increase connection pool size"}
+  ],
+  "service-down": [
+    {"id": "check-container", "title": "Check container/pod status — look for OOMKilled, CrashLoopBackOff"},
+    {"id": "check-resources", "title": "Review CPU, memory, and disk before the failure"},
+    {"id": "restart-service", "title": "Restart service via orchestrator (kubectl rollout restart)"},
+    {"id": "check-infrastructure", "title": "Verify node health, storage availability, network reachability"}
+  ],
+  "latency-anomaly": [
+    {"id": "check-cpu", "title": "Check CPU utilization — sustained >80% causes latency spikes"},
+    {"id": "check-gc", "title": "Review GC pause times and memory pressure"},
+    {"id": "identify-slow-endpoints", "title": "Check if latency is across all endpoints or specific paths"},
+    {"id": "scale-horizontal", "title": "Add instances to distribute load if CPU saturated"}
+  ],
+  "cascading-failure": [
+    {"id": "find-root-node", "title": "Follow dependency graph to find deepest failing node — fix there first"},
+    {"id": "implement-bulkhead", "title": "Add timeout + circuit breaker to contain blast radius"},
+    {"id": "isolate-dependency", "title": "Temporarily disable or mock the failing dependency"},
+    {"id": "verify-recovery", "title": "Watch upstream services recover as root dependency stabilizes"}
+  ],
+  "connection-refused": [
+    {"id": "check-dns", "title": "Verify DNS resolution and network connectivity"},
+    {"id": "check-firewall", "title": "Check security groups, firewall rules, service mesh config"},
+    {"id": "test-connectivity", "title": "Run direct connectivity test (curl, nc, telnet)"},
+    {"id": "restore-connectivity", "title": "Fix network/config issue and re-deploy if needed"}
+  ],
+  "transient-error": [
+    {"id": "monitor", "title": "Monitor — low error rate, likely self-healing. Set alert for >50% in 5 min"},
+    {"id": "check-retries", "title": "Verify retries are succeeding in logs"},
+    {"id": "verify-self-healing", "title": "Confirm error rate stays below 5% for 10 minutes"}
+  ],
+  "5xx": [
+    {"id": "check-deployment", "title": "Check recent deployments"},
+    {"id": "rollback", "title": "Roll back if deployment is correlated"}
+  ],
+  "latency": [
+    {"id": "scale-up", "title": "Scale up instances"},
+    {"id": "check-resources", "title": "Check CPU and memory utilization"}
+  ]
+}

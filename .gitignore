@@ -1,0 +1,42 @@
+#node modules
+node_modules/
+.next/
+
+#go files
+**/bin/
+**/pkg/
+**/vendor/
+
+.pptx
+.docs
+.pdf
+
+# ── Secrets — NEVER commit ─────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+*.pem
+*.key
+secrets/
+certs/
+
+# ── Go compiled binaries ────────────────────────────────────────────────────
+services/api-gateway/api-gateway
+services/detection-engine/detection-engine
+services/graph-manager/graph-manager
+services/signal-ingestion/signal-ingestion
+services/rca-ranker/rca-ranker
+services/recommendation/recommendation
+services/code-indexer/code-indexer
+services/demo-services/demo-services
+services/onboarding-worker/onboarding-worker
+services/health-poller/health-poller
+services/k8s-connector/k8s-connector
+services/otel-receiver/otel-receiver
+
+# ── Personal / internal documents ──────────────────────────────────────────
+docs/internal/
+*.pptx
+*.docx
+*.pdf

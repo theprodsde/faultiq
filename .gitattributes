@@ -1,0 +1,25 @@
+# Force LF line endings for all shell scripts (critical for Docker on Windows)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force LF for Dockerfiles (avoids issues with COPY/RUN heredocs)
+Dockerfile* text eol=lf
+*.dockerfile text eol=lf
+
+# Force LF for compose files
+docker-compose*.yml text eol=lf
+docker-compose*.yaml text eol=lf
+
+# Force LF for Go source files (built in Linux containers)
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# Force LF for SQL migration files (executed inside Linux containers)
+*.sql text eol=lf
+
+# Keep JSON files as LF (mounted into Linux containers)
+*.json text eol=lf
+
+# Environment files
+.env* text eol=lf

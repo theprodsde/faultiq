@@ -1,0 +1,330 @@
+{
+  "realm": "faultiq",
+  "sslRequired": "none",
+  "enabled": true,
+  "displayName": "FaultIQ Platform",
+  "displayNameHtml": "<div class=\"kc-logo-text\"><span>FaultIQ</span></div>",
+  
+  "accessTokenLifespan": 3600,
+  
+  "clients": [
+    {
+      "clientId": "faultiq-ui",
+      "name": "FaultIQ UI",
+      "description": "FaultIQ Web Console",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:4001/*",
+        "http://localhost:4001/",
+        "http://localhost:3000/*",
+        "http://localhost:3000/"
+      ],
+      "webOrigins": [
+        "http://localhost:4001",
+        "http://localhost:3000",
+        "*"
+      ],
+      "rootUrl": "http://localhost:4001",
+      "baseUrl": "http://localhost:4001",
+      "adminUrl": "http://localhost:4001",
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "projects",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "projects",
+            "claim.name": "projects",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "faultiq-backend",
+      "name": "FaultIQ Backend Services",
+      "description": "Backend service-to-service authentication",
+      "enabled": true,
+      "publicClient": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "secret": "faultiq-backend-secret-change-in-production",
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "projects",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "projects",
+            "claim.name": "projects",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  
+  "roles": {
+    "realm": [
+      {
+        "name": "super_admin",
+        "description": "Full platform access - manages all tenants and configurations"
+      },
+      {
+        "name": "tenant_admin",
+        "description": "Tenant-level admin - manages projects and team members within tenant"
+      },
+      {
+        "name": "project_admin",
+        "description": "Project-level admin - manages graph, incidents, and recommendations"
+      },
+      {
+        "name": "analyst",
+        "description": "Can analyze incidents and view recommendations"
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only access to incidents and graphs"
+      },
+      {
+        "name": "signal_publisher",
+        "description": "Can submit signals/metrics only - for monitoring integrations"
+      }
+    ]
+  },
+
+  "users": [
+    {
+      "username": "super",
+      "enabled": true,
+      "firstName": "Super",
+      "lastName": "Admin",
+      "email": "super@faultiq.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "superpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["super_admin"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform,orders-platform"
+      }
+    },
+    {
+      "username": "org-admin",
+      "enabled": true,
+      "firstName": "Organization",
+      "lastName": "Admin",
+      "email": "orgadmin@acme-corp.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "orgadminpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["tenant_admin"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform,orders-platform,analytics-platform"
+      }
+    },
+    {
+      "username": "project-admin",
+      "enabled": true,
+      "firstName": "Project",
+      "lastName": "Admin",
+      "email": "projadmin@acme-corp.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "projadminpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["project_admin"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform"
+      }
+    },
+    {
+      "username": "analyst",
+      "enabled": true,
+      "firstName": "Analytics",
+      "lastName": "Engineer",
+      "email": "analyst@acme-corp.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analystpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform,orders-platform"
+      }
+    },
+    {
+      "username": "viewer",
+      "enabled": true,
+      "firstName": "Read Only",
+      "lastName": "User",
+      "email": "viewer@acme-corp.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "viewerpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["viewer"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform"
+      }
+    },
+    {
+      "username": "signal-publisher",
+      "enabled": true,
+      "firstName": "Signal",
+      "lastName": "Publisher",
+      "email": "signals@acme-corp.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "signalpublisherpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["signal_publisher"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "acme-corp",
+        "projects": "payments-platform,orders-platform,analytics-platform"
+      }
+    },
+    {
+      "username": "zen-admin",
+      "enabled": true,
+      "firstName": "Zen",
+      "lastName": "Admin",
+      "email": "admin@zen-inc.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "zenadminpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["tenant_admin"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "zen-inc",
+        "projects": "crm-system,email-service"
+      }
+    },
+    {
+      "username": "zen-viewer",
+      "enabled": true,
+      "firstName": "Zen",
+      "lastName": "Viewer",
+      "email": "viewer@zen-inc.local",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "zenviewerpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["viewer"],
+      "clientRoles": {
+        "account": ["manage-account"]
+      },
+      "attributes": {
+        "tenant": "zen-inc",
+        "projects": "crm-system"
+      }
+    }
+  ]
+}
