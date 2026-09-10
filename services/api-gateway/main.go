@@ -418,8 +418,8 @@ func projectStatusHandler(w http.ResponseWriter, r *http.Request) {
         }
         // return incidents filtered by project
         project := projectID
-        incidentMu.Lock()
-        defer incidentMu.Unlock()
+        incidentMu.RLock()
+        defer incidentMu.RUnlock()
         var out []types.Incident
         claims := GetClaims(r)
         for _, key := range incidentsByProject[project] {
@@ -509,21 +509,21 @@ func projectStatusHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     // count incidents in-memory
-    incidentMu.Lock()
+    incidentMu.RLock()
     cnt := 0
     var lastIncident types.Incident
     for _, key := range incidentsByProject[projectID] {
         cnt++
         lastIncident = incidents[key]
     }
-    incidentMu.Unlock()
+    incidentMu.RUnlock()
 
     _ = json.NewEncoder(w).Encode(map[string]interface{}{"project_id": projectID, "onboarding": map[string]string{"job_id": jobID, "status": status, "created_at": created}, "incidents_count": cnt, "last_incident": lastIncident})
 }
 
 // In-memory incident store
 var (
-    incidentMu         sync.Mutex
+    incidentMu         sync.RWMutex
     incidents          = make(map[string]types.Incident)
     incidentsByID      = make(map[string]string)   // incidentID → incidents map key
     incidentsByProject = make(map[string][]string) // projectID → []map key
@@ -632,8 +632,8 @@ func listIncidentsHandler(w http.ResponseWriter, r *http.Request) {
         }
     } else {
         // Fallback to in-memory store
-        incidentMu.Lock()
-        defer incidentMu.Unlock()
+        incidentMu.RLock()
+        defer incidentMu.RUnlock()
         for _, v := range incidents {
             if claims != nil {
                 if !hasRole(claims, "super_admin") {
@@ -943,8 +943,8 @@ func getIncidentHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     // Fallback to in-memory if DB unavailable
-    incidentMu.Lock()
-    defer incidentMu.Unlock()
+    incidentMu.RLock()
+    defer incidentMu.RUnlock()
 
     if key, found := incidentsByID[incidentId]; found {
         inc := incidents[key]
@@ -1085,8 +1085,8 @@ func projectIncidentsHandler(w http.ResponseWriter, r *http.Request) {
         }
     } else {
         // Fallback to in-memory (no cursor/search support)
-        incidentMu.Lock()
-        defer incidentMu.Unlock()
+        incidentMu.RLock()
+        defer incidentMu.RUnlock()
         for _, key := range incidentsByProject[projectId] {
             v := incidents[key]
             if claims != nil && !hasRole(claims, "super_admin") {
@@ -2037,14 +2037,11 @@ func onboardingHandler(w http.ResponseWriter, r *http.Request) {
     jobID := fmt.Sprintf("onb-%d", time.Now().UnixNano())
     job := map[string]interface{}{"job_id": jobID, "project_id": body.ProjectID, "mode": body.Mode, "sources": body.Sources}
     b, _ := json.Marshal(job)
-    raddr := os.Getenv("REDIS_ADDR")
-    if raddr == "" {
-        raddr = "redis:6379"
-    }
-    rdb := redis.NewClient(&redis.Options{Addr: raddr})
-    if err := rdb.RPush(r.Context(), "onboarding_jobs", b).Err(); err != nil {
-        // fallback to in-memory response but signal accepted
-        Errorf("failed to enqueue onboarding job: %v", err)
+    if globalRedis != nil {
+        if err := globalRedis.RPush(r.Context(), "onboarding_jobs", b).Err(); err != nil {
+            // fallback to in-memory response but signal accepted
+            Errorf("failed to enqueue onboarding job: %v", err)
+        }
     }
     w.WriteHeader(http.StatusAccepted)
     _ = json.NewEncoder(w).Encode(map[string]string{"job_id": jobID})
@@ -2858,13 +2855,6 @@ func sopHandler(w http.ResponseWriter, r *http.Request) {
 
         // Phase transitions triggered by step completion
         if body.Status == "DONE" {
-            redisAddr := os.Getenv("REDIS_ADDR")
-            if redisAddr == "" {
-                redisAddr = "redis:6379"
-            }
-            rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
-            defer rdb.Close()
-
             switch currentPhase {
             case "TRIAGING":
                 // Operator acknowledged first step → advance to FIXING
@@ -2883,7 +2873,7 @@ func sopHandler(w http.ResponseWriter, r *http.Request) {
                     "from": "TRIAGING", "to": "FIXING", "projectId": projectID, "tenantId": tenantID,
                 }
                 b, _ := json.Marshal(event)
-                _ = rdb.Publish(ctx, "incident_events", b).Err()
+                if globalRedis != nil { _ = globalRedis.Publish(ctx, "incident_events", b).Err() }
             case "FIXING", "NARROWING", "CONFIRMED":
                 // Step done, check if this step has autoVerify
                 var autoVerify bool
@@ -2925,7 +2915,7 @@ func sopHandler(w http.ResponseWriter, r *http.Request) {
                         "projectId": projectID, "tenantId": tenantID,
                     }
                     b, _ := json.Marshal(event)
-                    _ = rdb.Publish(ctx, "incident_events", b).Err()
+                    if globalRedis != nil { _ = globalRedis.Publish(ctx, "incident_events", b).Err() }
                 } else if !nextStepActivated {
                     // All steps done, no more auto-verify — resolve
                     _, _ = db.Exec(ctx,
@@ -2936,7 +2926,7 @@ func sopHandler(w http.ResponseWriter, r *http.Request) {
                         "projectId": projectID, "tenantId": tenantID, "phase": "RESOLVED",
                     }
                     b, _ := json.Marshal(event)
-                    _ = rdb.Publish(ctx, "incident_events", b).Err()
+                    if globalRedis != nil { _ = globalRedis.Publish(ctx, "incident_events", b).Err() }
                 }
             }
         }
@@ -3939,12 +3929,6 @@ func deploymentsHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         // Publish deployment event to Redis for detection-engine to correlate
-        raddr := os.Getenv("REDIS_ADDR")
-        if raddr == "" {
-            raddr = "redis:6379"
-        }
-        rdb := redis.NewClient(&redis.Options{Addr: raddr})
-        defer rdb.Close()
         event := map[string]interface{}{
             "type":            "deployment",
             "deploymentId":    deployID,
@@ -3960,7 +3944,7 @@ func deploymentsHandler(w http.ResponseWriter, r *http.Request) {
             "deployedAt":      time.Now().UTC().Format(time.RFC3339),
         }
         b, _ := json.Marshal(event)
-        _ = rdb.Publish(ctx, "deployment_events", b).Err()
+        if globalRedis != nil { _ = globalRedis.Publish(ctx, "deployment_events", b).Err() }
 
         w.Header().Set("Content-Type", "application/json")
         w.WriteHeader(http.StatusCreated)
@@ -4084,13 +4068,6 @@ func deploymentsBatchHandler(w http.ResponseWriter, r *http.Request) {
 
     claims := GetClaims(r)
 
-    raddr := os.Getenv("REDIS_ADDR")
-    if raddr == "" {
-        raddr = "redis:6379"
-    }
-    rdb := redis.NewClient(&redis.Options{Addr: raddr})
-    defer rdb.Close()
-
     type batchResult struct {
         DeploymentID    string `json:"deploymentId"`
         ServiceID       string `json:"serviceId"`
@@ -4158,7 +4135,7 @@ func deploymentsBatchHandler(w http.ResponseWriter, r *http.Request) {
             "deployedAt":      time.Now().UTC().Format(time.RFC3339),
         }
         b, _ := json.Marshal(event)
-        _ = rdb.Publish(ctx, "deployment_events", b).Err()
+        if globalRedis != nil { _ = globalRedis.Publish(ctx, "deployment_events", b).Err() }
 
         results = append(results, batchResult{
             DeploymentID:    deployID,
@@ -5235,11 +5212,6 @@ func assignIncidentHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     // Publish incident_updated event to Redis
-    raddr := os.Getenv("REDIS_ADDR")
-    if raddr == "" {
-        raddr = "redis:6379"
-    }
-    rdb := redis.NewClient(&redis.Options{Addr: raddr})
     assignTo := ""
     if body.AssignTo != nil {
         assignTo = *body.AssignTo
@@ -5250,8 +5222,7 @@ func assignIncidentHandler(w http.ResponseWriter, r *http.Request) {
         "assignedTo": assignTo,
     }
     b, _ := json.Marshal(event)
-    _ = rdb.Publish(r.Context(), "incident_events", b).Err()
-    _ = rdb.Close()
+    if globalRedis != nil { _ = globalRedis.Publish(r.Context(), "incident_events", b).Err() }
 
     w.WriteHeader(http.StatusNoContent)
 }

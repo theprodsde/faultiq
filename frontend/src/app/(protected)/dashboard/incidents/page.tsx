@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useListIncidentsQuery } from "@/store/services"
 import { useTenant } from "@/contexts/tenant-context"
 import { useListProjectsQuery } from "@/store/services"
@@ -65,6 +65,11 @@ export default function IncidentsPage() {
   const [statusFilter, setStatusFilter] = useState<IncidentStatus | "">("")
   const [environment, setEnvironment] = useState<string>("prod")
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300)
+    return () => clearTimeout(t)
+  }, [searchQuery])
   const [dateRange, setDateRange] = useState<string | null>(null)
   const [minConfidence, setMinConfidence] = useState(0)
   const [sortOrder, setSortOrder] = useState<"newest" | "confidence">("newest")
@@ -102,7 +107,7 @@ export default function IncidentsPage() {
       status: statusFilter || undefined,
       environment: environment || undefined,
       limit: 50,
-      q: searchQuery || undefined,
+      q: debouncedSearch || undefined,
       cursor,
     },
     { skip: !selectedProjectId, pollingInterval: !cursor ? 30000 : 0 }
@@ -121,9 +126,10 @@ export default function IncidentsPage() {
   }
 
   // SSE real-time events
+  const handleSseEvent = useCallback(() => refetch(), [refetch])
   const { connected: sseConnected } = useIncidentEvents({
     projectId: selectedProjectId ?? undefined,
-    onEvent: () => refetch(),
+    onEvent: handleSseEvent,
   })
 
   // Client-side filtering and sorting (search is handled server-side via ?q= param)

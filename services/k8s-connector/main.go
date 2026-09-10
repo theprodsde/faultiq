@@ -73,7 +73,7 @@ func discoverServices(ctx context.Context, cs *kubernetes.Clientset, namespace s
 		return nil, fmt.Errorf("list services: %w", err)
 	}
 
-	var entries []ServiceEntry
+	entries := make([]ServiceEntry, 0, len(list.Items))
 	for _, svc := range list.Items {
 		ann := svc.Annotations
 		if ann == nil {

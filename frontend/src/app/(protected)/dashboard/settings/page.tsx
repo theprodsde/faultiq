@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { motion } from "framer-motion"
 import { Shield, Bell, Palette, Lock, Monitor, Sun, Moon, Users, Mail, Plus, X } from "lucide-react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useTheme } from "next-themes"
 
 export default function SettingsPage() {
@@ -27,6 +27,13 @@ export default function SettingsPage() {
   const [inviteRole, setInviteRole] = useState("user")
   const [inviteToast, setInviteToast] = useState(false)
 
+  useEffect(() => {
+    if (inviteToast) {
+      const t = setTimeout(() => setInviteToast(false), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [inviteToast])
+
   const { data: membersData, error: membersError } = useListTenantMembersQuery(tenantId ?? "", {
     skip: !tenantId,
   })
@@ -37,7 +44,6 @@ export default function SettingsPage() {
     setInviteEmail("")
     setInviteRole("user")
     setInviteToast(true)
-    setTimeout(() => setInviteToast(false), 3000)
   }
 
   // Determine current user's role from members list

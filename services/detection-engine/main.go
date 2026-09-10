@@ -190,7 +190,7 @@ func recordRecentIncident(incidentID, service, namespace string) {
 // findRecentIncidentRedis checks Redis for a recent incident for this service within the dedup window.
 // Falls back to in-memory if Redis is unavailable.
 func (d *Detector) findRecentIncidentRedis(ctx context.Context, service, namespace string) (string, bool) {
-    key := fmt.Sprintf("incident_dedup:%s:%s", service, namespace)
+    key := dedupKey(service, namespace)
     val, err := d.rdb.Get(ctx, key).Result()
     if err != nil {
         // Redis unavailable — fall back to in-memory
@@ -202,7 +202,7 @@ func (d *Detector) findRecentIncidentRedis(ctx context.Context, service, namespa
 // recordRecentIncidentRedis stores a new incident ID in Redis with TTL = deduplicationWindow.
 // Falls back to in-memory if Redis is unavailable.
 func (d *Detector) recordRecentIncidentRedis(ctx context.Context, incidentID, service, namespace string) {
-    key := fmt.Sprintf("incident_dedup:%s:%s", service, namespace)
+    key := dedupKey(service, namespace)
     if err := d.rdb.SetEx(ctx, key, incidentID, deduplicationWindow).Err(); err != nil {
         // Redis unavailable — fall back to in-memory
         recordRecentIncident(incidentID, service, namespace)
@@ -471,7 +471,7 @@ func (d *Detector) checkAutoRecovery(ctx context.Context) {
                 `UPDATE incidents SET status = 'RESOLVED', phase = 'RESOLVED', resolved_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'OPEN'`, id)
             log.Printf("auto-resolved incident %s for service %s (no recent signals)", id, service)
             // Clear Redis dedup key so new incident can be created after recovery
-            d.rdb.Del(ctx2, fmt.Sprintf("incident_dedup:%s:%s", service, ns))
+            d.rdb.Del(ctx2, dedupKey(service, ns))
             event := map[string]string{"type": "incident_resolved", "incidentId": id, "service": service, "projectId": projectID}
             eventJSON, _ := json.Marshal(event)
             _ = d.rdb.Publish(ctx2, "incident_events", eventJSON).Err()
@@ -533,7 +533,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     namespace := d.resolveNamespace(ctx, projectID, s.Environment)
 
     // ── FAST PATH: Get graph from in-memory cache (no HTTP, <1ms) ──
-    g := d.graphCache.Get(ctx, namespace)
+    g, reverseEdges := d.graphCache.GetWithReverse(ctx, namespace)
     
     // Apply signal status to the impacted node
     impactedNode, nodeExists := g.Nodes[s.Service]
@@ -557,7 +557,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     if isHealthyStatus(s.StatusClass) && !isHealthyStatus(previousStatus) {
         log.Printf("recovery detected: %s went from %s → %s (transient)", s.Service, previousStatus, s.StatusClass)
         // Clear consecutive counter on recovery
-        d.rdb.Del(ctx, fmt.Sprintf("consec:%s:%s", s.Service, namespace))
+        d.rdb.Del(ctx, consecKey(s.Service, namespace))
         existingID, exists := d.findRecentIncidentRedis(ctx, s.Service, namespace)
         if exists {
             // Fire-and-forget: resolve the incident
@@ -584,7 +584,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     }
     if isHealthyStatus(s.StatusClass) && s.ErrorRate < healthThreshold {
         // Clear consecutive unhealthy counter when service recovers
-        d.rdb.Del(ctx, fmt.Sprintf("consec:%s:%s", s.Service, namespace))
+        d.rdb.Del(ctx, consecKey(s.Service, namespace))
         go d.handleHealthySignal(context.Background(), s.Service, s)
         return
     }
@@ -599,7 +599,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     existingID, exists := d.findRecentIncidentRedis(ctx, s.Service, namespace)
     if exists {
         // Accumulate evidence and re-rank — this is the SOP NARROWING step
-        go d.accumulateEvidence(context.Background(), existingID, s, namespace, g)
+        go d.accumulateEvidence(context.Background(), existingID, s, namespace, g, reverseEdges)
         return
     }
 
@@ -609,9 +609,9 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
         minRequired = 1
     }
     if minRequired > 1 {
-        consecKey := fmt.Sprintf("consec:%s:%s", s.Service, namespace)
-        count, _ := d.rdb.Incr(ctx, consecKey).Result()
-        d.rdb.Expire(ctx, consecKey, 2*defaultPollInterval)
+        cKey := consecKey(s.Service, namespace)
+        count, _ := d.rdb.Incr(ctx, cKey).Result()
+        d.rdb.Expire(ctx, cKey, 2*defaultPollInterval)
         if int(count) < minRequired {
             log.Printf("consecutive check: %s count=%d/%d — not enough to alert", s.Service, count, minRequired)
             return
@@ -678,12 +678,22 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     d.recordRecentIncidentRedis(ctx, incidentID, s.Service, namespace)
 
     // ── ASYNC PATH: Heavy operations in background (DB writes, RCA ranker) ──
-    go d.persistIncidentAsync(ctx, incidentID, tenantID, projectID, s, suspects, faultType, recommendations, g)
+    go d.persistIncidentAsync(ctx, incidentID, tenantID, projectID, s, suspects, faultType, recommendations, g, reverseEdges)
 }
 
 // isHealthyStatus checks if a status class indicates a healthy node
 func isHealthyStatus(status string) bool {
     return status == "" || status == "2xx" || (len(status) > 0 && status[0] == '2')
+}
+
+// dedupKey returns the Redis dedup key for a service+namespace pair.
+func dedupKey(service, namespace string) string {
+    return "incident_dedup:" + service + ":" + namespace
+}
+
+// consecKey returns the Redis consecutive-signal counter key for a service+namespace pair.
+func consecKey(service, namespace string) string {
+    return "consec:" + service + ":" + namespace
 }
 
 // buildReverseEdges constructs a reverse adjacency map from a forward edge map.
@@ -698,7 +708,7 @@ func buildReverseEdges(edges map[string][]string) map[string][]string {
 }
 
 // persistIncidentAsync handles all slow operations after the detection event is already published
-func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantID, projectID string, s Signal, suspects []string, faultType FaultType, recommendations []Recommendation, g *Graph) {
+func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantID, projectID string, s Signal, suspects []string, faultType FaultType, recommendations []Recommendation, g *Graph, reverseEdges map[string][]string) {
     // Call RCA Ranker for refined confidence scoring
     rcaRankerURL := os.Getenv("RCA_RANKER_URL")
     if rcaRankerURL == "" {
@@ -710,8 +720,7 @@ func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantI
         Impact        float64 `json:"impact"`
         ErrorRate     float64 `json:"error_rate"`
     }
-    // Build reverse edge map to compute caller-based blast radius impact
-    reverseEdges := buildReverseEdges(g.Edges)
+    // Use precomputed reverse edge map from cache (caller-based blast radius impact)
     totalNodes := len(g.Nodes)
     if totalNodes == 0 {
         totalNodes = 1
@@ -1040,7 +1049,7 @@ func (d *Detector) advancePhase(ctx context.Context, incidentID, projectID, tena
 
 // accumulateEvidence increments evidence for a service on an existing incident,
 // re-scores all RCA candidates, and advances the SOP phase when confidence is sufficient.
-func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s Signal, namespace string, g *Graph) {
+func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s Signal, namespace string, g *Graph, reverseEdges map[string][]string) {
     if d.conn == nil {
         return
     }
@@ -1086,16 +1095,25 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
     }
     rows.Close()
 
-    // Query incident evidence JSONB to compute time-decayed evidence score
-    var evidenceRaw []byte
-    _ = d.conn.QueryRow(ctx,
-        `SELECT COALESCE(evidence::text, '[]') FROM incidents WHERE id = $1`, incidentID).Scan(&evidenceRaw)
-    var signals []map[string]interface{}
-    _ = json.Unmarshal(evidenceRaw, &signals)
-    decayedEv := decayEvidence(signals)
+    // Incremental O(1) decay: read stored running sum + timestamp, apply decay, write back.
+    var oldScore float64
+    var lastUpdated time.Time
+    row := d.conn.QueryRow(ctx, `SELECT COALESCE(decay_score,0), COALESCE(decay_updated_at, NOW()) FROM incidents WHERE id=$1`, incidentID)
+    _ = row.Scan(&oldScore, &lastUpdated)
+
+    const lambda = 0.1
+    deltaMinutes := time.Since(lastUpdated).Minutes()
+    newDecayScore := oldScore*math.Exp(-lambda*deltaMinutes) + 1.0
+    if newDecayScore > 5.0 {
+        newDecayScore = 5.0
+    }
+    decayedEv := newDecayScore / 5.0
+
+    _, _ = d.conn.Exec(ctx,
+        `UPDATE incidents SET decay_score=$1, decay_updated_at=NOW() WHERE id=$2`,
+        newDecayScore, incidentID)
 
     // 3. Re-score each candidate with real inputs from the graph
-    reverseEdges := buildReverseEdges(g.Edges)
     totalNodes := len(g.Nodes)
     if totalNodes == 0 {
         totalNodes = 1
@@ -1103,6 +1121,8 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
 
     bestScore := 0.0
     bestNodeID := ""
+    ids := make([]string, 0, len(candidates))
+    scores := make([]float64, 0, len(candidates))
     for _, c := range candidates {
         node := g.Nodes[c.nodeID]
         errorRate := 0.0
@@ -1112,13 +1132,19 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
         callerCount := len(reverseEdges[c.nodeID])
         impact := float64(callerCount) / float64(totalNodes)
         newScore := scoreCandidate(c.evidenceCount, impact, errorRate, decayedEv)
-        _, _ = d.conn.Exec(ctx,
-            `UPDATE rca_candidates SET confidence_score = $1 WHERE id = $2`,
-            newScore, c.id)
+        ids = append(ids, c.id)
+        scores = append(scores, newScore)
         if newScore > bestScore {
             bestScore = newScore
             bestNodeID = c.nodeID
         }
+    }
+    if len(ids) > 0 {
+        _, _ = d.conn.Exec(ctx,
+            `UPDATE rca_candidates SET confidence_score = u.score
+             FROM (SELECT unnest($1::text[]) AS id, unnest($2::float8[]) AS score) u
+             WHERE rca_candidates.id = u.id`,
+            ids, scores)
     }
 
     // 4. Get current phase
@@ -1636,7 +1662,9 @@ func ensureSchema(ctx context.Context, conn *pgxpool.Pool) error {
             updated_at           TIMESTAMPTZ DEFAULT NOW(),
             evidence             JSONB DEFAULT '[]',
             root_cause_candidate TEXT,
-            confidence           FLOAT DEFAULT 0.0
+            confidence           FLOAT DEFAULT 0.0,
+            decay_score          FLOAT DEFAULT 0,
+            decay_updated_at     TIMESTAMPTZ DEFAULT NOW()
         )`)
     if err != nil {
         return err
@@ -1795,6 +1823,8 @@ func ensureSchema(ctx context.Context, conn *pgxpool.Pool) error {
         `ALTER TABLE deployments ADD COLUMN IF NOT EXISTS health_gate_until TIMESTAMPTZ`,
         `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS assigned_to TEXT`,
         `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ`,
+        `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS decay_score FLOAT DEFAULT 0`,
+        `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS decay_updated_at TIMESTAMPTZ DEFAULT NOW()`,
     }
     for _, b := range backfills {
         if _, err = conn.Exec(ctx, b); err != nil {

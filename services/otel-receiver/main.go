@@ -150,7 +150,7 @@ func (a *windowAggregator) flush() map[string]serviceAgg {
 	}
 	result := make(map[string]serviceAgg)
 	for svcID, records := range byService {
-		var durations []float64
+		durations := make([]float64, 0, len(records))
 		errorCount := 0
 		for _, r := range records {
 			durations = append(durations, r.durationMs)
@@ -291,7 +291,7 @@ func extractCallEdges(spans []otelSpan, namespace string) []graphEdge {
 	}
 
 	seen := map[string]bool{}
-	var edges []graphEdge
+	edges := make([]graphEdge, 0, len(spans))
 	for _, sp := range spans {
 		if sp.ParentSpanID == "" {
 			continue

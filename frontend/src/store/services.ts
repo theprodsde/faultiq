@@ -49,12 +49,10 @@ export const faultiqApi = baseApi.injectEndpoints({
     listProjects: build.query<{ projects: ProjectListItem[]; total: number }, string>({
       query: (tenantId) => `/tenants/${tenantId}/projects`,
       providesTags: (result) => {
-        if (!result || !Array.isArray((result as any).projects)) {
-          return [{ type: "Project", id: "LIST" }]
-        }
+        if (!result?.projects?.length) return [{ type: "Project" as const, id: "LIST" }]
         return [
           ...result.projects.map((p) => ({ type: "Project" as const, id: p.id })),
-          { type: "Project", id: "LIST" },
+          { type: "Project" as const, id: "LIST" },
         ]
       },
     }),
@@ -128,12 +126,10 @@ export const faultiqApi = baseApi.injectEndpoints({
         params,
       }),
       providesTags: (result) => {
-        if (!result || !Array.isArray((result as any).incidents)) {
-          return [{ type: "Incident", id: "LIST" }]
-        }
+        if (!result?.incidents?.length) return [{ type: "Incident" as const, id: "LIST" }]
         return [
           ...result.incidents.map((i) => ({ type: "Incident" as const, id: i.id })),
-          { type: "Incident", id: "LIST" },
+          { type: "Incident" as const, id: "LIST" },
         ]
       },
     }),
@@ -163,10 +159,7 @@ export const faultiqApi = baseApi.injectEndpoints({
         method: "PUT",
         body: { status },
       }),
-      invalidatesTags: (_r, _e, { incidentId }) => [
-        { type: "Incident", id: incidentId },
-        { type: "Incident", id: "LIST" },
-      ],
+      invalidatesTags: (_r, _e, { incidentId }) => [{ type: "Incident" as const, id: incidentId }],
     }),
 
     // ── Signals ─────────────────────────────────────────────────────────
@@ -408,7 +401,7 @@ export const faultiqApi = baseApi.injectEndpoints({
         method: "PATCH",
         body: { assignTo },
       }),
-      invalidatesTags: (_r, _e, { incidentId }) => [{ type: "Incident", id: incidentId }, { type: "Incident", id: "LIST" }],
+      invalidatesTags: (_r, _e, { incidentId }) => [{ type: "Incident" as const, id: incidentId }],
     }),
 
     // ── RCA Feedback ─────────────────────────────────────────────────────────

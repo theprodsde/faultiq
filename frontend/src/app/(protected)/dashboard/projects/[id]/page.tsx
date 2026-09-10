@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import {
@@ -202,6 +202,33 @@ export default function ProjectSettingsPage() {
   const [sloSaved, setSloSaved] = useState<Record<string, boolean>>({})
   const [updateServiceSLO] = useUpdateServiceSLOMutation()
 
+  useEffect(() => {
+    if (saved) {
+      const t = setTimeout(() => setSaved(false), 2500)
+      return () => clearTimeout(t)
+    }
+  }, [saved])
+
+  useEffect(() => {
+    if (webhookSaved) {
+      const t = setTimeout(() => setWebhookSaved(false), 2500)
+      return () => clearTimeout(t)
+    }
+  }, [webhookSaved])
+
+  useEffect(() => {
+    const trueSloIds = Object.keys(sloSaved).filter(id => sloSaved[id])
+    if (trueSloIds.length === 0) return
+    const t = setTimeout(() => {
+      setSloSaved(prev => {
+        const next = { ...prev }
+        trueSloIds.forEach(id => { next[id] = false })
+        return next
+      })
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [sloSaved])
+
   const triggerReindex = async (serviceId: string) => {
     setReindexing((prev) => ({ ...prev, [serviceId]: true }))
     try {
@@ -223,7 +250,6 @@ export default function ProjectSettingsPage() {
     })
     if ("data" in result) {
       setSaved(true)
-      setTimeout(() => setSaved(false), 2500)
     }
   }
 
@@ -263,7 +289,6 @@ export default function ProjectSettingsPage() {
     try {
       await updateServiceSLO({ projectId: projectId as string, serviceId, env: sloEnv[serviceId] ?? "prod", body })
       setSloSaved((prev) => ({ ...prev, [serviceId]: true }))
-      setTimeout(() => setSloSaved((prev) => ({ ...prev, [serviceId]: false })), 2500)
       setSloEditing(null)
     } finally {
       setSloSaving((prev) => ({ ...prev, [serviceId]: false }))
@@ -278,7 +303,6 @@ export default function ProjectSettingsPage() {
         body: { notificationWebhook: webhookUrl },
       })
       setWebhookSaved(true)
-      setTimeout(() => setWebhookSaved(false), 2500)
     } finally {
       setWebhookSaving(false)
     }

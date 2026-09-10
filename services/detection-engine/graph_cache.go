@@ -20,8 +20,9 @@ type GraphCache struct {
 }
 
 type cachedGraph struct {
-	graph     *Graph
-	fetchedAt time.Time
+	graph        *Graph
+	reverseEdges map[string][]string
+	fetchedAt    time.Time
 }
 
 const graphCacheTTL = 30 * time.Second // refresh graph every 30s
@@ -57,6 +58,36 @@ func (c *GraphCache) Get(ctx context.Context, namespace string) *Graph {
 	return c.fetchAndCache(ctx, namespace)
 }
 
+// GetWithReverse returns the cached graph and its precomputed reverse edge map.
+// If not cached or stale, behaves like Get (stale-while-revalidate).
+func (c *GraphCache) GetWithReverse(ctx context.Context, namespace string) (*Graph, map[string][]string) {
+	c.mu.RLock()
+	entry, ok := c.graphs[namespace]
+	c.mu.RUnlock()
+
+	if ok && entry.graph != nil {
+		if time.Since(entry.fetchedAt) > graphCacheTTL {
+			go func() {
+				c.sfGroup.Do(namespace, func() (interface{}, error) {
+					c.refresh(namespace)
+					return nil, nil
+				})
+			}()
+		}
+		return entry.graph, entry.reverseEdges
+	}
+
+	g := c.fetchAndCache(ctx, namespace)
+	// Re-read entry to get reverseEdges after fetch
+	c.mu.RLock()
+	entry, ok = c.graphs[namespace]
+	c.mu.RUnlock()
+	if ok && entry.reverseEdges != nil {
+		return g, entry.reverseEdges
+	}
+	return g, buildReverseEdges(g.Edges)
+}
+
 func (c *GraphCache) refresh(namespace string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -80,7 +111,7 @@ func (c *GraphCache) fetchAndCache(ctx context.Context, namespace string) *Graph
 	g := convertFromRemote(remote)
 
 	c.mu.Lock()
-	c.graphs[namespace] = &cachedGraph{graph: g, fetchedAt: time.Now()}
+	c.graphs[namespace] = &cachedGraph{graph: g, reverseEdges: buildReverseEdges(g.Edges), fetchedAt: time.Now()}
 	c.mu.Unlock()
 
 	return g

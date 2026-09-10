@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { useAuth } from "@/providers/auth-provider"
 import { config } from "@/config"
-import type { ServiceNode, ServiceEdge, NodeType, IncidentListItem } from "@/types/api"
+import type { ServiceNode, ServiceEdge, NodeType, EdgeType, IncidentListItem } from "@/types/api"
 
 const NODE_COLORS: Record<NodeType, string> = {
   SERVICE:  "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700",
@@ -133,7 +133,7 @@ export default function GraphPage() {
       ? (graph!.edges as ServiceEdge[])
       : graph?.edges
         ? Object.entries(graph.edges as Record<string, string[]>)
-            .flatMap(([from, tos], groupIdx) => (Array.isArray(tos) ? tos.map((to, i) => ({ id: `edge-${groupIdx}-${i}`, from, to, type: "CALLS" as any, confidence: 0.9 } as ServiceEdge)) : []))
+            .flatMap(([from, tos], groupIdx) => (Array.isArray(tos) ? tos.map((to, i) => ({ id: `edge-${groupIdx}-${i}`, from, to, type: "CALLS" as EdgeType, confidence: 0.9 })) : []))
         : [],
     [graph]
   )
@@ -154,6 +154,14 @@ export default function GraphPage() {
   const handleNodeSelect = useCallback((nodeId: string | null) => {
     setSelectedNodeId(nodeId)
   }, [])
+
+  // Auto-clear takingDown after 1.5s (with proper cleanup)
+  useEffect(() => {
+    if (takingDown) {
+      const t = setTimeout(() => setTakingDown(null), 1500)
+      return () => clearTimeout(t)
+    }
+  }, [takingDown])
 
   // Take down a service by sending an error signal
   const handleTakeDown = async (serviceId: string) => {
@@ -183,8 +191,6 @@ export default function GraphPage() {
       })
     } catch (err) {
       console.error("Take down signal failed:", err)
-    } finally {
-      setTimeout(() => setTakingDown(null), 1500)
     }
   }
 

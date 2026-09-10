@@ -47,6 +47,10 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
   const incidentMapRef = useRef<Record<string, IncidentEntry>>({})
   // Track graph topology — only re-initialize Cytoscape when node/edge IDs actually change
   const topologyFingerprintRef = useRef<string>("")
+  const topologyFingerprint = useMemo(() => [
+    nodes.map(n => n.id).sort().join(","),
+    edges.map(e => `${e.from}->${e.to}`).sort().join(","),
+  ].join("|"), [nodes, edges])
   const incidentMap = useMemo(() => {
     const map: Record<string, IncidentEntry> = {}
     for (const s of incidentStates) {
@@ -107,12 +111,8 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
 
     // Only re-initialize if TOPOLOGY changes (node IDs or edge connections).
     // Status/health changes are handled by the patch effect below — never re-layout for data updates.
-    const newFingerprint = [
-      nodes.map((n) => n.id).sort().join(","),
-      edges.map((e) => `${e.from}->${e.to}`).sort().join(","),
-    ].join("|");
-    if (cyRef.current && newFingerprint === topologyFingerprintRef.current) return
-    topologyFingerprintRef.current = newFingerprint
+    if (cyRef.current && topologyFingerprint === topologyFingerprintRef.current) return
+    topologyFingerprintRef.current = topologyFingerprint
 
     // Cancelled flag prevents the async init from writing to refs after unmount
     let cancelled = false
@@ -329,9 +329,9 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
         cyRef.current = null
       }
     }
-  // IMPORTANT: Only depend on mounted. Nodes/edges changes are handled by the topology fingerprint check inside.
+  // IMPORTANT: Only depend on topologyFingerprint + mounted. Health/status changes are handled by the patch effect below.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, mounted])
+  }, [topologyFingerprint, mounted])
 
   // O(1) lookup maps for node/edge patch effect
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes])

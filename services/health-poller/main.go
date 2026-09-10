@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -571,7 +572,15 @@ func (p *Poller) runProject(ctx context.Context, project servicemap.ProjectEntry
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Poll immediately on start
+	// Stagger projects across the poll window with a random jitter.
+	jitter := time.Duration(rand.Int63n(int64(interval)))
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(jitter):
+	}
+
+	// Poll immediately after jitter
 	p.pollProject(ctx, project)
 
 	for {

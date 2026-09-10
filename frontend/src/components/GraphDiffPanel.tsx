@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useGetGraphDiffQuery, useTakeGraphSnapshotMutation } from "@/store/services"
 import { Camera, Plus, Minus, RefreshCw, Server, Database, Layers, Activity, Globe } from "lucide-react"
 import { Card } from "@/components/ui/card"
@@ -20,6 +20,13 @@ const TYPE_ICON: Record<string, React.ReactNode> = {
 export function GraphDiffPanel({ projectId }: GraphDiffPanelProps) {
   const [snapSuccess, setSnapSuccess] = useState(false)
 
+  useEffect(() => {
+    if (snapSuccess) {
+      const t = setTimeout(() => setSnapSuccess(false), 2500)
+      return () => clearTimeout(t)
+    }
+  }, [snapSuccess])
+
   const {
     data: diff,
     isLoading,
@@ -33,7 +40,6 @@ export function GraphDiffPanel({ projectId }: GraphDiffPanelProps) {
     const result = await takeSnapshot(projectId)
     if ("data" in result) {
       setSnapSuccess(true)
-      setTimeout(() => setSnapSuccess(false), 2500)
       refetch()
     }
   }

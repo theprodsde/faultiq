@@ -99,11 +99,17 @@ export function SOPPlaybookEditor({
     setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, [field]: value } : s)))
   }
 
+  useEffect(() => {
+    if (saveSuccess) {
+      const t = setTimeout(() => setSaveSuccess(false), 2500)
+      return () => clearTimeout(t)
+    }
+  }, [saveSuccess])
+
   const handleSave = async () => {
     const result = await updatePlaybook({ projectId, serviceId, steps })
     if ("data" in result) {
       setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2500)
     }
   }
 
@@ -159,7 +165,7 @@ export function SOPPlaybookEditor({
             ) : (
               steps.map((step, idx) => (
                 <div
-                  key={idx}
+                  key={step.order}
                   className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4"
                 >
                   <div className="flex items-center justify-between gap-2 mb-3">
@@ -247,9 +253,8 @@ export function SOPPlaybookEditor({
                         >
                           <span
                             className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
-                              step.autoVerify ? "translate-x-4.5" : "translate-x-0.5"
+                              step.autoVerify ? "translate-x-[18px]" : "translate-x-[2px]"
                             }`}
-                            style={{ transform: step.autoVerify ? "translateX(18px)" : "translateX(2px)" }}
                           />
                         </button>
                       </div>
