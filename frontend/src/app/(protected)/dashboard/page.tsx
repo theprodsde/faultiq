@@ -29,10 +29,15 @@ import {
   ExternalLink,
 } from "lucide-react"
 import Link from "next/link"
+import dynamic from "next/dynamic"
 import type { GraphStatus, IncidentPhase, NodeType } from "@/types/api"
 import ClientDate from "@/components/ClientDate"
-import { ServiceSparkline } from "@/components/ServiceSparkline"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
+
+const ServiceSparkline = dynamic(
+  () => import("@/components/ServiceSparkline").then(m => ({ default: m.ServiceSparkline })),
+  { ssr: false, loading: () => <div className="h-8 w-full animate-pulse bg-muted rounded" /> }
+)
 
 const GRAPH_STATUS_BADGE: Record<GraphStatus, "success" | "warning" | "secondary"> = {
   PUBLISHED: "success",

@@ -5,6 +5,16 @@ import (
     "testing"
 )
 
+func buildReverseEdgesTest(edges map[string][]string) map[string][]string {
+    rev := make(map[string][]string, len(edges))
+    for from, tos := range edges {
+        for _, to := range tos {
+            rev[to] = append(rev[to], from)
+        }
+    }
+    return rev
+}
+
 func TestDetectSuspects_Simple(t *testing.T) {
     g := &Graph{
         Nodes: map[string]*Node{
@@ -18,7 +28,7 @@ func TestDetectSuspects_Simple(t *testing.T) {
         },
     }
 
-    suspects := DetectSuspects(g, []string{"svc-a"}, 3)
+    suspects := DetectSuspects(g, []string{"svc-a"}, 3, buildReverseEdgesTest(g.Edges))
     found := map[string]bool{}
     for _, s := range suspects { found[s] = true }
 
@@ -41,7 +51,7 @@ func TestDetectSuspects_PrunesHealthy(t *testing.T) {
         },
     }
 
-    suspects := DetectSuspects(g, []string{"gw"}, 5)
+    suspects := DetectSuspects(g, []string{"gw"}, 5, buildReverseEdgesTest(g.Edges))
     // Should detect 'a' and 'c' as suspects, but 'b' is healthy and pruned
     want := []string{"a", "c"}
     // convert to map for comparison

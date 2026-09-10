@@ -15,6 +15,7 @@ import (
     "sync"
     "time"
 
+    "github.com/jackc/pgx/v5"
     "github.com/jackc/pgx/v5/pgxpool"
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promhttp"
@@ -592,7 +593,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     // ── FAST PATH: BFS detection on in-memory graph (<5ms for typical graphs) ──
     bfsStart := time.Now()
     impacted := []string{s.Service}
-    suspects := DetectSuspects(g, impacted, 5)
+    suspects := DetectSuspects(g, impacted, 5, reverseEdges)
     bfsDurationMs.Observe(float64(time.Since(bfsStart).Milliseconds()))
 
     // ── Deduplication: check if an incident already exists ──
@@ -858,26 +859,38 @@ func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantI
     // Immediately advance to NARROWING — first signal always starts the narrowing phase
     d.advancePhase(context.Background(), incidentID, projectID, tenantID, PhaseDetecting, PhaseNarrowing)
 
-    // Persist RCA candidates
+    // Persist RCA candidates — single batch INSERT
+    rcaBatch := &pgx.Batch{}
     for i, rc := range rankedCandidates {
         candidateID := fmt.Sprintf("%s-rca-%d", incidentID, i)
-        _, _ = d.conn.Exec(context.Background(),
+        rcaBatch.Queue(
             `INSERT INTO rca_candidates (id, incident_id, candidate_node_id, confidence_score, evidence)
-             VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
             candidateID, incidentID, rc.Service, rc.Confidence, string(evidenceJSON),
         )
     }
+    rcaBr := d.conn.SendBatch(context.Background(), rcaBatch)
+    for range rankedCandidates {
+        _, _ = rcaBr.Exec()
+    }
+    _ = rcaBr.Close()
 
-    // Persist recommendations
+    // Persist recommendations — single batch INSERT
+    recBatch := &pgx.Batch{}
     for i, rec := range recommendations {
         recID := fmt.Sprintf("%s-rec-%d", incidentID, i)
         stepsJSON, _ := json.Marshal(rec.Steps)
-        _, _ = d.conn.Exec(context.Background(),
+        recBatch.Queue(
             `INSERT INTO recommendations (id, incident_id, rank, playbook_title, steps)
-             VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
             recID, incidentID, i+1, rec.Title, string(stepsJSON),
         )
     }
+    recBr := d.conn.SendBatch(context.Background(), recBatch)
+    for range recommendations {
+        _, _ = recBr.Exec()
+    }
+    _ = recBr.Close()
 
     // Check for recent deployments (within 30 min) — correlate with the fault
     recentDeploy := d.findRecentDeployment(context.Background(), projectID, s.Service, 30*time.Minute)
@@ -1828,6 +1841,18 @@ func ensureSchema(ctx context.Context, conn *pgxpool.Pool) error {
     }
     for _, b := range backfills {
         if _, err = conn.Exec(ctx, b); err != nil {
+            return err
+        }
+    }
+
+    // Missing FK indexes (Postgres does not auto-index foreign keys) + hot-path indexes
+    for _, idx := range []string{
+        `CREATE INDEX IF NOT EXISTS idx_rca_candidates_incident  ON rca_candidates(incident_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_rca_candidates_node      ON rca_candidates(candidate_node_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_recommendations_incident ON recommendations(incident_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_incidents_verifying      ON incidents(service, detected_at DESC) WHERE phase = 'VERIFYING' AND status IN ('OPEN','ACKNOWLEDGED')`,
+    } {
+        if _, err = conn.Exec(ctx, idx); err != nil {
             return err
         }
     }

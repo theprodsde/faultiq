@@ -19,8 +19,9 @@ type EvidencePayload struct {
 }
 
 type RankRequest struct {
-    IncidentID string                    `json:"incident_id"`
+    IncidentID string                     `json:"incident_id"`
     Services   map[string]EvidencePayload `json:"services"` // service -> evidence
+    TopK       int                        `json:"top_k,omitempty"`
 }
 
 type RankedCandidate struct {
@@ -117,6 +118,11 @@ func rankHandler(w http.ResponseWriter, r *http.Request) {
     // Assign ranks
     for i := range candidates {
         candidates[i].Rank = i + 1
+    }
+
+    // Apply top-k truncation if requested
+    if req.TopK > 0 && req.TopK < len(candidates) {
+        candidates = candidates[:req.TopK]
     }
 
     // Root cause is the top-ranked service

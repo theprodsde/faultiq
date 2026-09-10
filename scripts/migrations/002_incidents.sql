@@ -201,5 +201,18 @@ CREATE TABLE IF NOT EXISTS rca_feedback (
 CREATE INDEX IF NOT EXISTS idx_rca_feedback_incident ON rca_feedback(incident_id);
 CREATE INDEX IF NOT EXISTS idx_rca_feedback_project  ON rca_feedback(project_id);
 
+-- Missing FK indexes (Postgres does not auto-index foreign keys)
+CREATE INDEX IF NOT EXISTS idx_rca_candidates_incident    ON rca_candidates(incident_id);
+CREATE INDEX IF NOT EXISTS idx_rca_candidates_node        ON rca_candidates(candidate_node_id);
+CREATE INDEX IF NOT EXISTS idx_recommendations_incident   ON recommendations(incident_id);
+
+-- JSONB expression index for project list filtering
+CREATE INDEX IF NOT EXISTS idx_projects_graph_status      ON projects((metadata->>'graphStatus'));
+
+-- Partial composite index for the high-frequency VERIFYING-phase lookup
+CREATE INDEX IF NOT EXISTS idx_incidents_verifying
+    ON incidents(service, detected_at DESC)
+    WHERE phase = 'VERIFYING' AND status IN ('OPEN', 'ACKNOWLEDGED');
+
 INSERT INTO schema_migrations (version, applied_at) VALUES ('002_incidents', NOW())
     ON CONFLICT (version) DO NOTHING;

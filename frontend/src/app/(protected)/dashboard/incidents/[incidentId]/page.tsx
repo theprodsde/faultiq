@@ -432,7 +432,7 @@ export default function IncidentDetailPage() {
             </h2>
             <div className="space-y-2">
               {(incident.triggerSignals ?? []).map((sig, i) => (
-                <TriggerSignalRow key={sig.nodeId + i} signal={sig} index={i} />
+                <TriggerSignalRow key={`${sig.nodeId || 'signal'}-${i}`} signal={sig} index={i} />
               ))}
             </div>
           </div>

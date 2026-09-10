@@ -8,8 +8,13 @@ import { useTenant } from "@/contexts/tenant-context"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Loading, EmptyState, ErrorState } from "@/components/ui/states"
-import { InteractiveGraphCytoscape } from "@/components/interactive-graph-cytoscape"
+import dynamic from "next/dynamic"
 import { NodeDetailPanel } from "@/components/NodeDetailPanel"
+
+const InteractiveGraphCytoscape = dynamic(
+  () => import("@/components/interactive-graph-cytoscape").then(m => ({ default: m.InteractiveGraphCytoscape })),
+  { ssr: false, loading: () => <div className="flex h-[600px] items-center justify-center"><span className="text-muted-foreground">Loading graph...</span></div> }
+)
 import { useIncidentEvents } from "@/hooks/useIncidentEvents"
 import { GitBranch, Wifi, WifiOff, CheckCircle2, AlertTriangle, Power } from "lucide-react"
 import { motion } from "framer-motion"

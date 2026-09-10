@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"math"
 	"sort"
 )
@@ -32,6 +33,51 @@ func Score(c Candidate) float64 {
 
 	// Weighted formula: evidence 40%, propagation 35%, impact 15%, errorRate 10%
 	return evidenceNorm*0.40 + propagation*0.35 + c.Impact*0.15 + c.ErrorRate*0.10
+}
+
+// candidateHeap is a min-heap of RankedCandidate ordered by ascending Confidence.
+// Used by TopKCandidates to maintain the k highest-confidence candidates in O(n log k).
+type candidateHeap []RankedCandidate
+
+func (h candidateHeap) Len() int           { return len(h) }
+func (h candidateHeap) Less(i, j int) bool { return h[i].Confidence < h[j].Confidence }
+func (h candidateHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *candidateHeap) Push(x interface{}) {
+	*h = append(*h, x.(RankedCandidate))
+}
+func (h *candidateHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+// TopKCandidates returns the top k highest-confidence candidates in O(n log k).
+// Falls back to Rank when k <= 0 or k >= len(candidates).
+func TopKCandidates(candidates []Candidate, k int) []Candidate {
+	if k <= 0 || k >= len(candidates) {
+		return Rank(candidates)
+	}
+	h := &candidateHeap{}
+	heap.Init(h)
+	for _, c := range candidates {
+		heap.Push(h, RankedCandidate{
+			Service:    c.ID,
+			Confidence: Score(c),
+			Evidence:   c.Evidence,
+			Impact:     c.Impact,
+		})
+		if h.Len() > k {
+			heap.Pop(h) // remove the lowest-confidence entry
+		}
+	}
+	result := make([]Candidate, h.Len())
+	for i := h.Len() - 1; i >= 0; i-- {
+		rc := heap.Pop(h).(RankedCandidate)
+		result[i] = Candidate{ID: rc.Service, Evidence: rc.Evidence, Impact: rc.Impact}
+	}
+	return result
 }
 
 // Rank returns candidates sorted by descending score.

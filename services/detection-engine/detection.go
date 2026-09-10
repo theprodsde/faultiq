@@ -19,7 +19,8 @@ type Graph struct {
 // DetectSuspects runs a BFS from impacted services and returns suspect node IDs.
 // It considers edge confidence (low-confidence edges are deprioritized) and
 // propagates errors upstream through reverse edges (who calls the failing service).
-func DetectSuspects(g *Graph, impacted []string, maxDepth int) []string {
+// reverseEdges must be precomputed by the caller (e.g. via GraphCache.GetWithReverse).
+func DetectSuspects(g *Graph, impacted []string, maxDepth int, reverseEdges map[string][]string) []string {
     suspects := make(map[string]struct{})
     visited := make(map[string]int)
     q := list.New()
@@ -27,14 +28,6 @@ func DetectSuspects(g *Graph, impacted []string, maxDepth int) []string {
     for _, id := range impacted {
         q.PushBack(struct{ id string; depth int }{id: id, depth: 0})
         visited[id] = 0
-    }
-
-    // Build reverse edge map for upstream propagation
-    reverseEdges := make(map[string][]string)
-    for from, tos := range g.Edges {
-        for _, to := range tos {
-            reverseEdges[to] = append(reverseEdges[to], from)
-        }
     }
 
     for q.Len() > 0 {
