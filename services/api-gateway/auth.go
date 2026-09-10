@@ -3,6 +3,7 @@ package main
 import (
     "context"
     "crypto/rsa"
+    "crypto/sha256"
     "encoding/base64"
     "encoding/json"
     "fmt"
@@ -21,6 +22,54 @@ import (
 type contextKey string
 
 const ctxUserKey contextKey = "user"
+
+// tokenCache stores verified token claims keyed by sha256(token) until the JWT's exp
+type tokenCacheEntry struct {
+	claims map[string]interface{}
+	exp    time.Time
+}
+
+var tokenCache sync.Map // key: [32]byte (sha256 of raw token) → tokenCacheEntry
+
+func init() {
+	startTokenCacheEviction()
+}
+
+func startTokenCacheEviction() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			tokenCache.Range(func(k, v interface{}) bool {
+				if e, ok := v.(tokenCacheEntry); ok && e.exp.Before(now) {
+					tokenCache.Delete(k)
+				}
+				return true
+			})
+		}
+	}()
+}
+
+// parseJWTExp decodes the JWT middle segment to extract the exp claim.
+// Returns a 60-second fallback TTL if parsing fails.
+func parseJWTExp(rawToken string) time.Time {
+	parts := strings.SplitN(rawToken, ".", 3)
+	if len(parts) < 2 {
+		return time.Now().Add(60 * time.Second)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Now().Add(60 * time.Second)
+	}
+	var jwtClaims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &jwtClaims); err != nil || jwtClaims.Exp == 0 {
+		return time.Now().Add(60 * time.Second)
+	}
+	return time.Unix(jwtClaims.Exp, 0)
+}
 
 // JWKSManager handles fetching and refreshing JWKS from a URL.
 type JWKSManager struct {
@@ -291,7 +340,15 @@ func RequireAuth(next http.Handler) http.Handler {
             return
         }
 
-        // Fallback: call Keycloak userinfo endpoint
+        // Fallback: call Keycloak userinfo endpoint — check cache first
+        cacheKey := sha256.Sum256([]byte(raw))
+        if v, ok := tokenCache.Load(cacheKey); ok {
+            if entry, ok := v.(tokenCacheEntry); ok && entry.exp.After(time.Now()) {
+                ctx := context.WithValue(r.Context(), ctxUserKey, entry.claims)
+                next.ServeHTTP(w, r.WithContext(ctx))
+                return
+            }
+        }
         req, _ := http.NewRequestWithContext(r.Context(), "GET", userinfoURL, nil)
         req.Header.Set("Authorization", "Bearer "+raw)
         resp, err := http.DefaultClient.Do(req)
@@ -310,6 +367,8 @@ func RequireAuth(next http.Handler) http.Handler {
             http.Error(w, "invalid token claims", http.StatusUnauthorized)
             return
         }
+        expTime := parseJWTExp(raw)
+        tokenCache.Store(cacheKey, tokenCacheEntry{claims: claims, exp: expTime})
         ctx := context.WithValue(r.Context(), ctxUserKey, claims)
         next.ServeHTTP(w, r.WithContext(ctx))
     })

@@ -109,7 +109,15 @@ func NewDetector(ctx context.Context) (*Detector, error) {
         raddr = "redis:6379"
     }
 
-    pool, err := pgxpool.New(ctx, pg)
+    poolConfig, err := pgxpool.ParseConfig(pg)
+    if err != nil {
+        return nil, fmt.Errorf("pgxpool config: %w", err)
+    }
+    poolConfig.MaxConns = 20
+    poolConfig.MinConns = 2
+    poolConfig.MaxConnIdleTime = 5 * time.Minute
+    poolConfig.MaxConnLifetime = 30 * time.Minute
+    pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
     if err != nil {
         return nil, fmt.Errorf("pg pool: %w", err)
     }
@@ -453,6 +461,13 @@ func (d *Detector) checkAutoRecovery(ctx context.Context) {
         return
     }
     defer rows.Close()
+
+    type recoveryEvent struct {
+        dedupKey  string
+        eventJSON string
+    }
+    var events []recoveryEvent
+
     for rows.Next() {
         var id, service, projectID, phase string
         if err := rows.Scan(&id, &service, &projectID, &phase); err != nil {
@@ -467,16 +482,24 @@ func (d *Detector) checkAutoRecovery(ctx context.Context) {
         ns := d.resolveNamespace(ctx2, projectID, "prod")
         _, stillActive := d.findRecentIncidentRedis(ctx2, service, ns)
         if !stillActive {
-            // Auto-resolve
+            // Auto-resolve — DB update stays inline
             _, _ = d.conn.Exec(ctx2,
                 `UPDATE incidents SET status = 'RESOLVED', phase = 'RESOLVED', resolved_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'OPEN'`, id)
             log.Printf("auto-resolved incident %s for service %s (no recent signals)", id, service)
-            // Clear Redis dedup key so new incident can be created after recovery
-            d.rdb.Del(ctx2, dedupKey(service, ns))
             event := map[string]string{"type": "incident_resolved", "incidentId": id, "service": service, "projectId": projectID}
             eventJSON, _ := json.Marshal(event)
-            _ = d.rdb.Publish(ctx2, "incident_events", eventJSON).Err()
+            events = append(events, recoveryEvent{dedupKey: dedupKey(service, ns), eventJSON: string(eventJSON)})
         }
+    }
+
+    // Batch Redis Del + Publish in a single pipeline
+    if len(events) > 0 {
+        pipe := d.rdb.Pipeline()
+        for _, e := range events {
+            pipe.Del(ctx2, e.dedupKey)
+            pipe.Publish(ctx2, "incident_events", e.eventJSON)
+        }
+        _, _ = pipe.Exec(ctx2)
     }
 }
 
@@ -616,8 +639,13 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     }
     if minRequired > 1 {
         cKey := consecKey(s.Service, namespace)
-        count, _ := d.rdb.Incr(ctx, cKey).Result()
-        d.rdb.Expire(ctx, cKey, 2*defaultPollInterval)
+        var count int64
+        pipe := d.rdb.Pipeline()
+        incrCmd := pipe.Incr(ctx, cKey)
+        pipe.Expire(ctx, cKey, 2*defaultPollInterval)
+        if _, err := pipe.Exec(ctx); err == nil {
+            count = incrCmd.Val()
+        }
         if int(count) < minRequired {
             log.Printf("consecutive check: %s count=%d/%d — not enough to alert", s.Service, count, minRequired)
             return

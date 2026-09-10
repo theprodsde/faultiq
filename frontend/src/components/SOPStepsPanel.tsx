@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { memo, useState } from "react"
 import { Download, Pencil } from "lucide-react"
 import { useGetSOPPlaybookQuery, useUpdateSOPStepMutation, useGetPlaybookLearningQuery } from "@/store/services"
 import { SOPPlaybookEditor } from "@/components/SOPPlaybookEditor"
@@ -51,7 +51,7 @@ interface SOPStepsPanelProps {
   faultType?: string
 }
 
-export function SOPStepsPanel({
+export const SOPStepsPanel = memo(function SOPStepsPanel({
   incidentId,
   currentPhase = "DETECTING",
   projectId,
@@ -376,4 +376,4 @@ export function SOPStepsPanel({
       )}
     </div>
   )
-}
+})

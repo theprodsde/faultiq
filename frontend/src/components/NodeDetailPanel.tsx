@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { memo, useState, useMemo } from "react"
 import { X, AlertCircle, Activity, Clock, TrendingUp, GitBranch, ExternalLink, Wrench, CheckCircle2, Zap, Code, ArrowRight, ArrowLeft, Database, Layers, Server, Globe, Rocket, ChevronRight, ShieldOff } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { CodeContextPanel } from "@/components/CodeContextPanel"
@@ -114,7 +114,7 @@ function DeploymentRow({ dep }: { dep: import("@/types/api").Deployment }) {
   )
 }
 
-export function NodeDetailPanel({ node, incidents, onClose, projectId, allNodes = {}, edges = [] }: NodeDetailPanelProps) {
+export const NodeDetailPanel = memo(function NodeDetailPanel({ node, incidents, onClose, projectId, allNodes = {}, edges = [] }: NodeDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("overview")
   const [showMaintForm, setShowMaintForm] = useState(false)
   const [maintDuration, setMaintDuration] = useState<15 | 30 | 60>(15)
@@ -547,4 +547,4 @@ export function NodeDetailPanel({ node, incidents, onClose, projectId, allNodes 
       </div>
     </div>
   )
-}
+})

@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { LineChart, Line, ResponsiveContainer } from "recharts"
 import { useGetSignalHistoryQuery } from "@/store/services"
 
@@ -16,7 +17,7 @@ interface ServiceSparklineProps {
   }
 }
 
-export function ServiceSparkline({ projectId, serviceId, height = 50, preloadedData }: ServiceSparklineProps) {
+export const ServiceSparkline = memo(function ServiceSparkline({ projectId, serviceId, height = 50, preloadedData }: ServiceSparklineProps) {
   const skip = !projectId || !serviceId || preloadedData !== undefined
   const { data, isLoading } = useGetSignalHistoryQuery(
     { projectId, serviceId, hours: 24 },
@@ -61,4 +62,11 @@ export function ServiceSparkline({ projectId, serviceId, height = 50, preloadedD
       </LineChart>
     </ResponsiveContainer>
   )
-}
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.projectId === nextProps.projectId &&
+    prevProps.serviceId === nextProps.serviceId &&
+    prevProps.height === nextProps.height &&
+    prevProps.preloadedData === nextProps.preloadedData
+  )
+})
