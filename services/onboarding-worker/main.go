@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -104,64 +105,93 @@ func buildGraph(ctx context.Context, graphManagerURL string, project ProjectEntr
 
 	log.Printf("onboarding: building graph for %s (%d services)", ns, len(project.Services))
 
-	// Write nodes
+	// Write nodes concurrently — up to 8 in-flight requests at a time
+	eg, egCtx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, 8)
 	for _, svc := range project.Services {
-		node := GraphNode{
-			ID:          svc.ID,
-			Name:        svc.Name,
-			Type:        strings.ToUpper(svc.Type),
-			Tags:        svc.Tags,
-			StatusClass: "2xx",
-			LatencyP95:  50,
-			ErrorRate:   0.001,
-		}
-		if node.Type == "" {
-			node.Type = "SERVICE"
-		}
-		nodeJSON, _ := json.Marshal(node)
-		url := fmt.Sprintf("%s/nodes?namespace=%s", graphManagerURL, ns)
-		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(nodeJSON))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("write node %s: %w", svc.ID, err)
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-			log.Printf("onboarding: node %s returned %d", svc.ID, resp.StatusCode)
+		svc := svc
+		sem <- struct{}{}
+		eg.Go(func() error {
+			defer func() { <-sem }()
+			node := GraphNode{
+				ID:          svc.ID,
+				Name:        svc.Name,
+				Type:        strings.ToUpper(svc.Type),
+				Tags:        svc.Tags,
+				StatusClass: "2xx",
+				LatencyP95:  50,
+				ErrorRate:   0.001,
+			}
+			if node.Type == "" {
+				node.Type = "SERVICE"
+			}
+			nodeJSON, _ := json.Marshal(node)
+			nodeURL := fmt.Sprintf("%s/nodes?namespace=%s", graphManagerURL, ns)
+			req, _ := http.NewRequestWithContext(egCtx, "POST", nodeURL, bytes.NewReader(nodeJSON))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("write node %s: %w", svc.ID, err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+				log.Printf("onboarding: node %s returned %d", svc.ID, resp.StatusCode)
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+
+	// Pre-build edge list with stable IDs before fan-out (avoids shared counter race)
+	type edgeTask struct {
+		from string
+		to   string
+		idx  int
+	}
+	var edgeTasks []edgeTask
+	for _, svc := range project.Services {
+		for _, target := range svc.Calls {
+			edgeTasks = append(edgeTasks, edgeTask{from: svc.ID, to: target, idx: len(edgeTasks)})
 		}
 	}
 
-	// Write edges
-	edgeIdx := 0
-	for _, svc := range project.Services {
-		for _, target := range svc.Calls {
+	// Write edges concurrently — errors logged, not fatal (edge failures don't abort the graph)
+	eg2, egCtx2 := errgroup.WithContext(ctx)
+	sem2 := make(chan struct{}, 8)
+	for _, et := range edgeTasks {
+		et := et
+		sem2 <- struct{}{}
+		eg2.Go(func() error {
+			defer func() { <-sem2 }()
 			edge := GraphEdge{
-				ID:           fmt.Sprintf("edge-%d", edgeIdx),
-				From:         svc.ID,
-				To:           target,
+				ID:           fmt.Sprintf("edge-%d", et.idx),
+				From:         et.from,
+				To:           et.to,
 				Type:         "CALLS",
 				Confidence:   0.95,
 				SuccessRatio: 0.99,
 			}
-			edgeIdx++
 			edgeJSON, _ := json.Marshal(edge)
-			url := fmt.Sprintf("%s/edges?namespace=%s", graphManagerURL, ns)
-			req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(edgeJSON))
+			edgeURL := fmt.Sprintf("%s/edges?namespace=%s", graphManagerURL, ns)
+			req, _ := http.NewRequestWithContext(egCtx2, "POST", edgeURL, bytes.NewReader(edgeJSON))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := client.Do(req)
 			if err != nil {
-				log.Printf("onboarding: write edge %s→%s: %v", svc.ID, target, err)
-				continue
+				log.Printf("onboarding: write edge %s→%s: %v", et.from, et.to, err)
+				return nil // edge failures are non-fatal
 			}
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-		}
+			return nil
+		})
 	}
+	eg2.Wait() //nolint:errcheck — goroutines always return nil
 
 	log.Printf("onboarding: graph built for %s — %d nodes, %d edges",
-		ns, len(project.Services), edgeIdx)
+		ns, len(project.Services), len(edgeTasks))
 	return nil
 }
 

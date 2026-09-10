@@ -60,8 +60,8 @@ export function SOPStepsPanel({
 }: SOPStepsPanelProps) {
   const [showEditor, setShowEditor] = useState(false)
 
-  const { data: playbook, isLoading, refetch } = useGetSOPPlaybookQuery(incidentId, {
-    pollingInterval: 5000,
+  const { data: playbook, isLoading } = useGetSOPPlaybookQuery(incidentId, {
+    pollingInterval: currentPhase === "RESOLVED" ? 0 : 5000,
   })
   const [updateStep, { isLoading: isUpdating }] = useUpdateSOPStepMutation()
 
@@ -84,7 +84,7 @@ export function SOPStepsPanel({
 
   const handleStep = async (order: number, status: "DONE" | "FAILED") => {
     await updateStep({ incidentId, stepOrder: order, status })
-    refetch()
+    // RTK Query invalidateTags in the mutation definition triggers a re-fetch automatically
   }
 
   const exportRunbook = () => {

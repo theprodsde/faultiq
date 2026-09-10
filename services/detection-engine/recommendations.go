@@ -96,30 +96,49 @@ func GenerateSOPPlaybookWithLearning(faultType FaultType, serviceName string, le
 		return steps // not enough data to reorder
 	}
 
-	// Sort: steps with high success rate float to top, unknown rate keeps order
-	sort.SliceStable(steps, func(i, j int) bool {
-		si, siKnown := successByOrder[steps[i].Order]
-		sj, sjKnown := successByOrder[steps[j].Order]
-		if siKnown && sjKnown {
-			return si > sj // higher success rate first
+	// Precompute scores to avoid repeated map lookups during sort
+	type indexedStep struct {
+		step  SOPStep
+		score float64
+	}
+	scored := make([]indexedStep, len(steps))
+	for i, s := range steps {
+		v, ok := successByOrder[s.Order]
+		if ok {
+			scored[i] = indexedStep{s, v}
+		} else {
+			scored[i] = indexedStep{s, -1}
 		}
-		if siKnown {
-			return true // known before unknown
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		si, sj := scored[i].score, scored[j].score
+		if si < 0 && sj < 0 {
+			return false
 		}
-		return false
+		if si < 0 {
+			return false
+		}
+		if sj < 0 {
+			return true
+		}
+		return si > sj
 	})
+	result := make([]SOPStep, len(scored))
+	for i, s := range scored {
+		result[i] = s.step
+	}
 
 	// Re-assign order numbers after reordering and set first step as ACTIVE
-	for i := range steps {
-		steps[i].Order = i + 1
-		if steps[i].Status == "" {
-			steps[i].Status = "PENDING"
+	for i := range result {
+		result[i].Order = i + 1
+		if result[i].Status == "" {
+			result[i].Status = "PENDING"
 		}
 	}
-	if len(steps) > 0 {
-		steps[0].Status = "ACTIVE" // first step is always active
+	if len(result) > 0 {
+		result[0].Status = "ACTIVE" // first step is always active
 	}
-	return steps
+	return result
 }
 
 // FaultType classifies the kind of failure detected.

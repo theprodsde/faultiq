@@ -109,12 +109,11 @@ func (m *Manager) GetSubgraph(ctx context.Context, namespace string) (*graphclie
                     errRateFloat = float64(v)
                 }
             }
-            tagsList := []string{}
-            if tags != nil {
-                if tl, ok := tags.([]interface{}); ok {
-                    for _, t := range tl {
-                        tagsList = append(tagsList, fmt.Sprintf("%v", t))
-                    }
+            var tagsList []string
+            if tl, ok := tags.([]interface{}); ok {
+                tagsList = make([]string, 0, len(tl))
+                for _, t := range tl {
+                    tagsList = append(tagsList, fmt.Sprintf("%v", t))
                 }
             }
             

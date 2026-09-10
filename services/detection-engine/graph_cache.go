@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"github.com/faultiq/graphclient"
+	"golang.org/x/sync/singleflight"
 )
 
 // GraphCache maintains an in-memory copy of graphs per namespace.
 // This eliminates the HTTP fetch on every signal, bringing detection latency to <10ms.
 type GraphCache struct {
-	mu     sync.RWMutex
-	graphs map[string]*cachedGraph
-	gp     GraphProvider
+	mu       sync.RWMutex
+	graphs   map[string]*cachedGraph
+	gp       GraphProvider
+	sfGroup  singleflight.Group
 }
 
 type cachedGraph struct {
@@ -39,9 +41,14 @@ func (c *GraphCache) Get(ctx context.Context, namespace string) *Graph {
 	c.mu.RUnlock()
 
 	if ok && entry.graph != nil {
-		// If stale, trigger async refresh
+		// If stale, trigger async refresh — singleflight coalesces concurrent calls
 		if time.Since(entry.fetchedAt) > graphCacheTTL {
-			go c.refresh(namespace)
+			go func() {
+				c.sfGroup.Do(namespace, func() (interface{}, error) {
+					c.refresh(namespace)
+					return nil, nil
+				})
+			}()
 		}
 		return entry.graph
 	}

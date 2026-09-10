@@ -1,6 +1,9 @@
 package main
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 type Candidate struct {
 	ID           string
@@ -33,16 +36,17 @@ func Score(c Candidate) float64 {
 
 // Rank returns candidates sorted by descending score.
 func Rank(candidates []Candidate) []Candidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
 	out := make([]Candidate, len(candidates))
 	copy(out, candidates)
-	for i := 0; i < len(out); i++ {
-		best := i
-		for j := i + 1; j < len(out); j++ {
-			if Score(out[j]) > Score(out[best]) {
-				best = j
-			}
-		}
-		out[i], out[best] = out[best], out[i]
+	scores := make([]float64, len(out))
+	for i, c := range out {
+		scores[i] = Score(c)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return scores[i] > scores[j]
+	})
 	return out
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useAuth } from "@/providers/auth-provider"
 import { useTenant } from "@/contexts/tenant-context"
 import {
@@ -71,13 +71,16 @@ function ServiceHealthGrid({ projectId }: { projectId: string }) {
   )
 
   // Build a map of service → open incidents
-  const incidentsByService = incidents.reduce<Record<string, typeof incidents>>((acc, inc) => {
-    if (inc.service) {
-      acc[inc.service] = acc[inc.service] ?? []
-      acc[inc.service].push(inc)
-    }
-    return acc
-  }, {})
+  const incidentsByService = useMemo(
+    () => incidents.reduce<Record<string, typeof incidents>>((acc, inc) => {
+      if (inc.service) {
+        acc[inc.service] = acc[inc.service] ?? []
+        acc[inc.service].push(inc)
+      }
+      return acc
+    }, {}),
+    [incidents]
+  )
 
   if (!nodes.length) {
     return (
@@ -178,9 +181,20 @@ export default function DashboardPage() {
   const projects = projectsData?.projects ?? []
   const totalProjects = projectsData?.total ?? 0
   const allIncidents = tenantIncidents?.incidents ?? []
-  const openIncidents = allIncidents.filter((i) => i.status === "OPEN").length
-  const resolvedIncidents = allIncidents.filter((i) => i.status === "RESOLVED").length
-  const publishedGraphs = projects.filter((p) => p.graphStatus === "PUBLISHED").length
+
+  const { openIncidents, resolvedIncidents } = useMemo(() => {
+    let open = 0, resolved = 0
+    for (const i of allIncidents) {
+      if (i.status === "OPEN") open++
+      else if (i.status === "RESOLVED") resolved++
+    }
+    return { openIncidents: open, resolvedIncidents: resolved }
+  }, [allIncidents])
+
+  const publishedGraphs = useMemo(
+    () => projects.filter((p) => p.graphStatus === "PUBLISHED").length,
+    [projects]
+  )
 
   // Default health project to first with a published graph, else first project
   const defaultHealthProject = projects.find((p) => p.graphStatus === "PUBLISHED")?.id ?? projects[0]?.id ?? ""

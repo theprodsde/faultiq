@@ -46,6 +46,23 @@ func main() {
     pub := NewRedisPublisher(rdb)
     srv := NewServer(pub)
 
+    // Background goroutine to evict stale rate-limiter entries
+    go func() {
+        ticker := time.NewTicker(10 * time.Minute)
+        defer ticker.Stop()
+        for range ticker.C {
+            srv.mu.Lock()
+            cutoff := time.Now().Add(-15 * time.Minute)
+            for k, t := range srv.lastSeen {
+                if t.Before(cutoff) {
+                    delete(srv.limiters, k)
+                    delete(srv.lastSeen, k)
+                }
+            }
+            srv.mu.Unlock()
+        }
+    }()
+
     // SSE hub for real-time incident events
     sseHub := NewSSEHub(rdb)
     go sseHub.Run(ctx)
@@ -67,13 +84,18 @@ func main() {
 
 // Server holds dependencies for HTTP handlers
 type Server struct{
-    pub SignalPublisher
-    mu sync.Mutex
+    pub      SignalPublisher
+    mu       sync.Mutex
     limiters map[string]*rate.Limiter
+    lastSeen map[string]time.Time
 }
 
 func NewServer(pub SignalPublisher) *Server {
-    return &Server{pub: pub, limiters: map[string]*rate.Limiter{}}
+    return &Server{
+        pub:      pub,
+        limiters: make(map[string]*rate.Limiter),
+        lastSeen: make(map[string]time.Time),
+    }
 }
 
 // HandleSignals is the HTTP handler for /api/v1/signals
@@ -150,5 +172,6 @@ func (s *Server) getLimiter(key string) *rate.Limiter {
         l = rate.NewLimiter(5, 10)
         s.limiters[key] = l
     }
+    s.lastSeen[key] = time.Now()
     return l
 }

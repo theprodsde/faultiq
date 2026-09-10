@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { useDispatch } from "react-redux"
 import { useSearchParams } from "next/navigation"
 import { useGetCurrentGraphQuery, useListProjectsQuery, useListIncidentsQuery, faultiqApi } from "@/store/services"
@@ -67,7 +67,10 @@ export default function GraphPage() {
   }, [envFromUrl, selectedProjectId, projectsData])
 
   const activeProjectId = selectedProjectId || projectsData?.projects?.[0]?.id || ""
-  const activeProject = projectsData?.projects?.find(p => p.id === activeProjectId)
+  const activeProject = useMemo(
+    () => projectsData?.projects?.find(p => p.id === activeProjectId),
+    [projectsData, activeProjectId]
+  )
   const projectEnvironments: Array<{ id: string; name: string; namespace: string }> = activeProject?.environments || []
   const availableEnvs: Array<{ id: string; name: string; namespace: string }> = projectEnvironments.length > 0 ? projectEnvironments : [{ id: "1", name: "prod", namespace: "prod" }, { id: "2", name: "staging", namespace: "staging" }, { id: "3", name: "dev", namespace: "dev" }]
 
@@ -86,10 +89,10 @@ export default function GraphPage() {
     projectId: activeProjectId,
     tenantId: tenantId ?? undefined,
     onEvent: useCallback(() => {
-      // When an incident event arrives via SSE, refetch graph and force incident cache invalidation
-      refetch()
+      // When an incident event arrives via SSE, force incident cache invalidation
+      // (graph topology doesn't change on incidents — no refetch needed)
       dispatch(faultiqApi.util.invalidateTags([{ type: "Incident", id: "LIST" }]))
-    }, [refetch, dispatch]),
+    }, [dispatch]),
   })
 
   // Dynamic polling: fast when SSE disconnected (fallback), slow when SSE connected (SSE handles real-time)
@@ -103,35 +106,50 @@ export default function GraphPage() {
 
   // Build incident node states to pass to graph component
   // Only show OPEN and ACKNOWLEDGED incidents (hide RESOLVED)
-  const incidentStates = (incidentsData?.incidents ?? [])
-    .filter(inc => inc.status !== "RESOLVED")
-    .map((inc) => ({
-      serviceName: inc.service,
-      status: inc.status as "OPEN" | "ACKNOWLEDGED",
-      confidence: inc.confidence,
-      incidentId: inc.id,
-    }))
+  const incidentStates = useMemo(() =>
+    (incidentsData?.incidents ?? [])
+      .filter(inc => inc.status !== "RESOLVED")
+      .map((inc) => ({
+        serviceName: inc.service,
+        status: inc.status as "OPEN" | "ACKNOWLEDGED",
+        confidence: inc.confidence,
+        incidentId: inc.id,
+      })),
+    [incidentsData]
+  )
 
   // Normalize graph nodes/edges: backend may return maps or arrays
-  const nodesArray: ServiceNode[] = Array.isArray(graph?.nodes)
-    ? (graph!.nodes as ServiceNode[])
-    : graph?.nodes
-      ? Object.values(graph.nodes as Record<string, ServiceNode>)
-      : []
+  const nodesArray: ServiceNode[] = useMemo(() =>
+    Array.isArray(graph?.nodes)
+      ? (graph!.nodes as ServiceNode[])
+      : graph?.nodes
+        ? Object.values(graph.nodes as Record<string, ServiceNode>)
+        : [],
+    [graph]
+  )
 
-  const edgesArray: ServiceEdge[] = Array.isArray(graph?.edges)
-    ? (graph!.edges as ServiceEdge[])
-    : graph?.edges
-      ? Object.entries(graph.edges as Record<string, string[]>)
-          .flatMap(([from, tos], groupIdx) => (Array.isArray(tos) ? tos.map((to, i) => ({ id: `edge-${groupIdx}-${i}`, from, to, type: "CALLS" as any, confidence: 0.9 } as ServiceEdge)) : []))
-      : []
+  const edgesArray: ServiceEdge[] = useMemo(() =>
+    Array.isArray(graph?.edges)
+      ? (graph!.edges as ServiceEdge[])
+      : graph?.edges
+        ? Object.entries(graph.edges as Record<string, string[]>)
+            .flatMap(([from, tos], groupIdx) => (Array.isArray(tos) ? tos.map((to, i) => ({ id: `edge-${groupIdx}-${i}`, from, to, type: "CALLS" as any, confidence: 0.9 } as ServiceEdge)) : []))
+        : [],
+    [graph]
+  )
 
-  const nodeMap = Object.fromEntries(nodesArray.map((n) => [n.id, n.name]))
+  const nodeMap = useMemo(() => Object.fromEntries(nodesArray.map((n) => [n.id, n.name])), [nodesArray])
 
   // Find selected node details for the panel
-  const selectedNode = selectedNodeId
-    ? nodesArray.find((n) => n.id === selectedNodeId) || null
-    : null
+  const selectedNode = useMemo(
+    () => selectedNodeId ? nodesArray.find((n) => n.id === selectedNodeId) || null : null,
+    [selectedNodeId, nodesArray]
+  )
+
+  const allNodesMap = useMemo(
+    () => Object.fromEntries(nodesArray.map(n => [n.id, n])),
+    [nodesArray]
+  )
 
   const handleNodeSelect = useCallback((nodeId: string | null) => {
     setSelectedNodeId(nodeId)
@@ -354,7 +372,7 @@ export default function GraphPage() {
                   incidents={(incidentsData?.incidents ?? []) as IncidentListItem[]}
                   onClose={() => setSelectedNodeId(null)}
                   projectId={activeProjectId}
-                  allNodes={Object.fromEntries(nodesArray.map(n => [n.id, n]))}
+                  allNodes={allNodesMap}
                   edges={edgesArray}
                 />
               </motion.div>

@@ -72,6 +72,7 @@ type Poller struct {
 	smModTime    time.Time
 	tokenMu      sync.Mutex
 	tokenCache   map[string]*tokenCacheEntry // key = tokenURL+clientID
+	clientCache  sync.Map                   // key = "tlsSkipVerify:timeout" → *http.Client
 }
 
 func NewPoller(signalURL, smPath string) *Poller {
@@ -218,19 +219,27 @@ func (p *Poller) pollTCP(ctx context.Context, svc servicemap.ServiceEntry, timeo
 func (p *Poller) pollHTTP(ctx context.Context, svc servicemap.ServiceEntry, timeout time.Duration) Signal {
 	cfg := svc.HealthCheck // may be nil → use defaults
 
-	// Build HTTP client — handle TLS options
-	tlsConfig := &tls.Config{}
-	if cfg != nil && cfg.TLSSkipVerify {
-		tlsConfig.InsecureSkipVerify = true //nolint:gosec — intentional for internal services
-	}
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-			// Reasonable defaults for health polling
-			MaxIdleConns:    10,
-			IdleConnTimeout: 30 * time.Second,
-		},
+	// Build HTTP client — cache by (tlsSkipVerify, timeout) so transports are reused across polls.
+	tlsSkipVerify := cfg != nil && cfg.TLSSkipVerify
+	cacheKey := fmt.Sprintf("%v:%v", tlsSkipVerify, timeout)
+	var client *http.Client
+	if v, ok := p.clientCache.Load(cacheKey); ok {
+		client = v.(*http.Client)
+	} else {
+		tlsConfig := &tls.Config{}
+		if tlsSkipVerify {
+			tlsConfig.InsecureSkipVerify = true //nolint:gosec — intentional for internal services
+		}
+		client = &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+				// Reasonable defaults for health polling
+				MaxIdleConns:    10,
+				IdleConnTimeout: 30 * time.Second,
+			},
+		}
+		p.clientCache.Store(cacheKey, client)
 	}
 
 	// Determine HTTP method
@@ -393,24 +402,28 @@ func parseHealthBody(body []byte, format string, httpCode int, codeOK bool) stri
 		return "degraded"
 
 	default: // "auto" or "standard"
-		// Try TechGraph standard format first
-		var std struct {
+		// Single unmarshal covers both TechGraph-standard and Spring Boot formats.
+		// Eliminates the previous double/triple json.Unmarshal: std and spring were
+		// identical structs, and the spring branch recursively called this function again.
+		var r struct {
 			Status string `json:"status"`
 		}
-		if json.Unmarshal(body, &std) == nil {
-			switch strings.ToLower(std.Status) {
+		if json.Unmarshal(body, &r) == nil {
+			switch strings.ToLower(r.Status) {
 			case "ok", "healthy", "up", "alive":
 				return "2xx"
 			case "down", "error", "unhealthy":
 				return "5xx"
 			case "degraded", "warn", "warning":
 				return "degraded"
+			case "out_of_service":
+				return "503"
+			default:
+				if r.Status != "" {
+					// Non-empty but unrecognized status (e.g. "UNKNOWN") → degraded
+					return "degraded"
+				}
 			}
-		}
-		// Try Spring Boot format
-		var spring struct{ Status string `json:"status"` }
-		if json.Unmarshal(body, &spring) == nil && spring.Status != "" {
-			return parseHealthBody(body, "spring", httpCode, codeOK)
 		}
 		// Plain text
 		lower := strings.ToLower(strings.TrimSpace(bodyStr))
@@ -568,11 +581,12 @@ func (p *Poller) runProject(ctx context.Context, project servicemap.ProjectEntry
 		case <-ticker.C:
 			// Hot-reload: refresh project from service map (no-op if file unchanged)
 			if sm, err := p.getServiceMap(); err == nil {
+				smByID := make(map[string]servicemap.ProjectEntry, len(sm.Projects))
 				for _, proj := range sm.Projects {
-					if proj.ID == project.ID {
-						project = proj
-						break
-					}
+					smByID[proj.ID] = proj
+				}
+				if updated, ok := smByID[project.ID]; ok {
+					project = updated
 				}
 			}
 			p.pollProject(ctx, project)

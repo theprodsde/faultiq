@@ -60,7 +60,7 @@ func DetectSuspects(g *Graph, impacted []string, maxDepth int) []string {
 
         // Forward edges (downstream dependencies)
         for _, nb := range g.Edges[e.id] {
-            if _, ok := visited[nb]; !ok || visited[nb] > e.depth+1 {
+            if d, ok := visited[nb]; !ok || d > e.depth+1 {
                 visited[nb] = e.depth + 1
                 q.PushBack(struct{ id string; depth int }{id: nb, depth: e.depth + 1})
             }
@@ -68,7 +68,7 @@ func DetectSuspects(g *Graph, impacted []string, maxDepth int) []string {
 
         // Reverse edges (upstream callers) — propagate to find who is impacted
         for _, caller := range reverseEdges[e.id] {
-            if _, ok := visited[caller]; !ok || visited[caller] > e.depth+1 {
+            if d, ok := visited[caller]; !ok || d > e.depth+1 {
                 visited[caller] = e.depth + 1
                 q.PushBack(struct{ id string; depth int }{id: caller, depth: e.depth + 1})
             }

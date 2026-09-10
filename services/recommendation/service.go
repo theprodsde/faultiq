@@ -4,6 +4,7 @@ import (
     "encoding/json"
     "io/ioutil"
     "net/http"
+    "sort"
     "strings"
 )
 
@@ -13,7 +14,8 @@ type Playbook struct {
 }
 
 type Store struct {
-    mapping map[string][]Playbook
+    mapping    map[string][]Playbook
+    sortedKeys []string
 }
 
 func NewStoreFromFile(path string) (*Store, error) {
@@ -25,18 +27,27 @@ func NewStoreFromFile(path string) (*Store, error) {
     if err := json.Unmarshal(b, &m); err != nil {
         return nil, err
     }
-    return &Store{mapping: m}, nil
+    keys := make([]string, 0, len(m))
+    for k := range m {
+        keys = append(keys, k)
+    }
+    sort.Strings(keys)
+    return &Store{mapping: m, sortedKeys: keys}, nil
 }
 
 func (s *Store) Recommend(symptom string) []Playbook {
     if p, ok := s.mapping[symptom]; ok {
         return p
     }
-    // Fuzzy prefix match for backward compatibility
-    for key, p := range s.mapping {
-        if strings.HasPrefix(key, symptom) || strings.HasPrefix(symptom, key) {
-            return p
-        }
+    // Prefix lookup via binary search (O(log n))
+    i := sort.SearchStrings(s.sortedKeys, symptom)
+    // check forward: symptom is a prefix of sortedKeys[i]
+    if i < len(s.sortedKeys) && strings.HasPrefix(s.sortedKeys[i], symptom) {
+        return s.mapping[s.sortedKeys[i]]
+    }
+    // check backward: sortedKeys[i-1] is a prefix of symptom
+    if i > 0 && strings.HasPrefix(symptom, s.sortedKeys[i-1]) {
+        return s.mapping[s.sortedKeys[i-1]]
     }
     return nil
 }

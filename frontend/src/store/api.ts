@@ -12,7 +12,7 @@ export const baseApi = createApi({
       // Primary: window accessor set by auth-provider
       let token: string | undefined
       if (typeof window !== "undefined") {
-        token = (window as any).__faultiqToken as string | undefined
+        token = window.__faultiqToken
         // Fallback: check localStorage
         if (!token) {
           try {

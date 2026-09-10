@@ -156,36 +156,35 @@ type recentIncidentEntry struct {
 
 var (
     recentMu        sync.Mutex
-    recentIncidents []recentIncidentEntry
+    recentIncidents = make(map[string]recentIncidentEntry)
 )
 
 // findRecentIncident checks if an incident already exists for this service within the dedup window
 func findRecentIncident(service, namespace string) (string, bool) {
     recentMu.Lock()
     defer recentMu.Unlock()
+    key := service + ":" + namespace
     cutoff := time.Now().Add(-deduplicationWindow)
-    // also prune old entries
-    pruned := recentIncidents[:0]
-    var found string
-    for _, entry := range recentIncidents {
-        if entry.createdAt.After(cutoff) {
-            pruned = append(pruned, entry)
-            if entry.service == service && entry.namespace == namespace {
-                found = entry.incidentID
-            }
+    // prune stale entries
+    for k, e := range recentIncidents {
+        if !e.createdAt.After(cutoff) {
+            delete(recentIncidents, k)
         }
     }
-    recentIncidents = pruned
-    return found, found != ""
+    if e, ok := recentIncidents[key]; ok && e.createdAt.After(cutoff) {
+        return e.incidentID, true
+    }
+    return "", false
 }
 
 // recordRecentIncident registers a new incident for deduplication
 func recordRecentIncident(incidentID, service, namespace string) {
     recentMu.Lock()
     defer recentMu.Unlock()
-    recentIncidents = append(recentIncidents, recentIncidentEntry{
+    key := service + ":" + namespace
+    recentIncidents[key] = recentIncidentEntry{
         incidentID: incidentID, service: service, namespace: namespace, createdAt: time.Now(),
-    })
+    }
 }
 
 // findRecentIncidentRedis checks Redis for a recent incident for this service within the dedup window.
@@ -446,7 +445,7 @@ func (d *Detector) checkAutoRecovery(ctx context.Context) {
     defer cancel()
     // Find OPEN incidents older than 2 minutes that have had no new error signals
     rows, err := d.conn.Query(ctx2,
-        `SELECT id, service, project_id FROM incidents
+        `SELECT id, service, project_id, COALESCE(phase,'NARROWING') as phase FROM incidents
          WHERE status = 'OPEN' AND detected_at < NOW() - INTERVAL '2 minutes'
          ORDER BY detected_at ASC LIMIT 20`)
     if err != nil {
@@ -454,13 +453,11 @@ func (d *Detector) checkAutoRecovery(ctx context.Context) {
     }
     defer rows.Close()
     for rows.Next() {
-        var id, service, projectID string
-        if err := rows.Scan(&id, &service, &projectID); err != nil {
+        var id, service, projectID, phase string
+        if err := rows.Scan(&id, &service, &projectID, &phase); err != nil {
             continue
         }
         // Don't auto-resolve incidents actively being worked (TRIAGING/FIXING/VERIFYING)
-        var phase string
-        _ = d.conn.QueryRow(ctx2, `SELECT COALESCE(phase,'NARROWING') FROM incidents WHERE id=$1`, id).Scan(&phase)
         if phase == "TRIAGING" || phase == "FIXING" || phase == "VERIFYING" {
             continue
         }
@@ -545,10 +542,10 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
         return
     }
     
-    // Snapshot the previous state to detect transient vs persistent
+    // Snapshot the previous state to detect transient vs persistent.
+    // Do NOT write back to the shared struct — impactedNode is a pointer into
+    // the shared graph cache and mutating it races with concurrent goroutines.
     previousStatus := impactedNode.StatusClass
-    impactedNode.StatusClass = s.StatusClass
-    impactedNode.LatencyP95 = int(s.LatencyP95)
 
     // ── FAST PATH: Classify the fault type immediately (<1ms) ──
     faultType := ClassifyFault(s.StatusClass, s.ErrorRate, int(s.LatencyP95))
@@ -689,6 +686,17 @@ func isHealthyStatus(status string) bool {
     return status == "" || status == "2xx" || (len(status) > 0 && status[0] == '2')
 }
 
+// buildReverseEdges constructs a reverse adjacency map from a forward edge map.
+func buildReverseEdges(edges map[string][]string) map[string][]string {
+    rev := make(map[string][]string, len(edges))
+    for from, tos := range edges {
+        for _, to := range tos {
+            rev[to] = append(rev[to], from)
+        }
+    }
+    return rev
+}
+
 // persistIncidentAsync handles all slow operations after the detection event is already published
 func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantID, projectID string, s Signal, suspects []string, faultType FaultType, recommendations []Recommendation, g *Graph) {
     // Call RCA Ranker for refined confidence scoring
@@ -703,12 +711,7 @@ func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantI
         ErrorRate     float64 `json:"error_rate"`
     }
     // Build reverse edge map to compute caller-based blast radius impact
-    reverseEdges := make(map[string][]string)
-    for from, tos := range g.Edges {
-        for _, to := range tos {
-            reverseEdges[to] = append(reverseEdges[to], from)
-        }
-    }
+    reverseEdges := buildReverseEdges(g.Edges)
     totalNodes := len(g.Nodes)
     if totalNodes == 0 {
         totalNodes = 1
@@ -745,7 +748,7 @@ func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantI
         Confidence float64 `json:"confidence"`
         Rank       int     `json:"rank"`
     }
-    var rankedCandidates []rankedCandidate
+    rankedCandidates := make([]rankedCandidate, 0, len(suspects))
 
     rcaPayload := map[string]interface{}{
         "incident_id": incidentID,
@@ -1075,7 +1078,7 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
     if err != nil {
         return
     }
-    var candidates []candidateRow
+    candidates := make([]candidateRow, 0, 8)
     for rows.Next() {
         var c candidateRow
         _ = rows.Scan(&c.id, &c.nodeID, &c.evidenceCount, &c.currentScore)
@@ -1092,12 +1095,7 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
     decayedEv := decayEvidence(signals)
 
     // 3. Re-score each candidate with real inputs from the graph
-    reverseEdges := make(map[string][]string)
-    for from, tos := range g.Edges {
-        for _, to := range tos {
-            reverseEdges[to] = append(reverseEdges[to], from)
-        }
-    }
+    reverseEdges := buildReverseEdges(g.Edges)
     totalNodes := len(g.Nodes)
     if totalNodes == 0 {
         totalNodes = 1

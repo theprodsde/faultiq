@@ -1,6 +1,6 @@
 module github.com/faultiq/onboarding-worker
 
-go 1.24
+go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.7.0
@@ -16,5 +16,6 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 )

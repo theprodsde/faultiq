@@ -28,6 +28,10 @@ export function useIncidentEvents(options?: {
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Keep a ref to the latest onEvent callback so the connect closure never goes stale
+  const onEventRef = useRef(options?.onEvent)
+  useEffect(() => { onEventRef.current = options?.onEvent }, [options?.onEvent])
+
   const connect = useCallback(() => {
     // Use the WebSocket URL config (which points to signal-ingestion :8085)
     const baseUrl = config.websocketUrl?.replace("ws://", "http://").replace("wss://", "https://") || "http://localhost:8085"
@@ -49,7 +53,7 @@ export function useIncidentEvents(options?: {
           if (options?.tenantId && data.tenantId && data.tenantId !== options.tenantId) return
           
           setLastEvent(data)
-          options?.onEvent?.(data)
+          onEventRef.current?.(data)
         } catch {}
       })
 
@@ -59,7 +63,7 @@ export function useIncidentEvents(options?: {
           const event: IncidentEvent = { type: "signal", ...data }
           if (options?.projectId && data.projectId && data.projectId !== options.projectId) return
           setLastEvent(event)
-          options?.onEvent?.(event)
+          onEventRef.current?.(event)
         } catch {}
       })
 

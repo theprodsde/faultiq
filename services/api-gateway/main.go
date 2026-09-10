@@ -24,6 +24,7 @@ import (
     "github.com/jackc/pgx/v5/pgxpool"
     "github.com/prometheus/client_golang/prometheus/promhttp"
     "github.com/redis/go-redis/v9"
+    "golang.org/x/sync/errgroup"
     "golang.org/x/time/rate"
     "gopkg.in/yaml.v3"
 )
@@ -38,6 +39,9 @@ var (
     // globalDB is a shared pgxpool.Pool initialized once at startup.
     // All handlers should use getDB() rather than opening per-request connections.
     globalDB *pgxpool.Pool
+    // globalRedis is a shared Redis client initialized once at startup.
+    // All handlers should use globalRedis rather than creating per-request clients.
+    globalRedis *redis.Client
 )
 
 // initDB creates the global connection pool. Must be called once in main() before registering routes.
@@ -66,6 +70,16 @@ func initDB(ctx context.Context) error {
 // to per-request connections via pgx.Connect.
 func getDB() *pgxpool.Pool {
     return globalDB
+}
+
+// initRedis creates the global Redis client. Must be called once in main() before
+// registering routes so all handlers share a single connection pool.
+func initRedis() {
+    raddr := os.Getenv("REDIS_ADDR")
+    if raddr == "" {
+        raddr = "redis:6379"
+    }
+    globalRedis = redis.NewClient(&redis.Options{Addr: raddr})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -408,10 +422,8 @@ func projectStatusHandler(w http.ResponseWriter, r *http.Request) {
         defer incidentMu.Unlock()
         var out []types.Incident
         claims := GetClaims(r)
-        for _, inc := range incidents {
-            if inc.ProjectID != project {
-                continue
-            }
+        for _, key := range incidentsByProject[project] {
+            inc := incidents[key]
             // enforce tenant scoping unless super_admin
             if claims != nil && !hasRole(claims, "super_admin") {
                 if t, ok := claims["tenant"].(string); ok {
@@ -500,11 +512,9 @@ func projectStatusHandler(w http.ResponseWriter, r *http.Request) {
     incidentMu.Lock()
     cnt := 0
     var lastIncident types.Incident
-    for _, inc := range incidents {
-        if inc.ProjectID == projectID {
-            cnt++
-            lastIncident = inc
-        }
+    for _, key := range incidentsByProject[projectID] {
+        cnt++
+        lastIncident = incidents[key]
     }
     incidentMu.Unlock()
 
@@ -513,10 +523,39 @@ func projectStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 // In-memory incident store
 var (
-    incidentMu  sync.Mutex
-    incidents   = make(map[string]types.Incident)
-    incidentSeq = 0
+    incidentMu         sync.Mutex
+    incidents          = make(map[string]types.Incident)
+    incidentsByID      = make(map[string]string)   // incidentID → incidents map key
+    incidentsByProject = make(map[string][]string) // projectID → []map key
+    incidentSeq        = 0
 )
+
+// evictOldestIncidents removes the n oldest incidents from the in-memory store.
+// Must be called with incidentMu held.
+func evictOldestIncidents(n int) {
+    type kv struct {
+        key string
+        inc types.Incident
+    }
+    all := make([]kv, 0, len(incidents))
+    for k, v := range incidents {
+        all = append(all, kv{k, v})
+    }
+    sort.Slice(all, func(i, j int) bool { return all[i].inc.DetectedAt < all[j].inc.DetectedAt })
+    for i := 0; i < n && i < len(all); i++ {
+        k := all[i].key
+        inc := all[i].inc
+        delete(incidents, k)
+        delete(incidentsByID, inc.ID)
+        keys := incidentsByProject[inc.ProjectID]
+        for j, ik := range keys {
+            if ik == k {
+                incidentsByProject[inc.ProjectID] = append(keys[:j], keys[j+1:]...)
+                break
+            }
+        }
+    }
+}
 
 func listIncidentsHandler(w http.ResponseWriter, r *http.Request) {
     claims := GetClaims(r)
@@ -907,20 +946,19 @@ func getIncidentHandler(w http.ResponseWriter, r *http.Request) {
     incidentMu.Lock()
     defer incidentMu.Unlock()
 
-    for _, inc := range incidents {
-        if inc.ID == incidentId {
-            if claims != nil && !hasRole(claims, "super_admin") {
-                if t, ok := claims["tenant"].(string); ok {
-                    if inc.TenantID != t {
-                        http.Error(w, "forbidden", http.StatusForbidden)
-                        return
-                    }
+    if key, found := incidentsByID[incidentId]; found {
+        inc := incidents[key]
+        if claims != nil && !hasRole(claims, "super_admin") {
+            if t, ok2 := claims["tenant"].(string); ok2 {
+                if inc.TenantID != t {
+                    http.Error(w, "forbidden", http.StatusForbidden)
+                    return
                 }
             }
-            w.Header().Set("Content-Type", "application/json")
-            _ = json.NewEncoder(w).Encode(inc)
-            return
         }
+        w.Header().Set("Content-Type", "application/json")
+        _ = json.NewEncoder(w).Encode(inc)
+        return
     }
 
     http.Error(w, "incident not found", http.StatusNotFound)
@@ -1049,10 +1087,8 @@ func projectIncidentsHandler(w http.ResponseWriter, r *http.Request) {
         // Fallback to in-memory (no cursor/search support)
         incidentMu.Lock()
         defer incidentMu.Unlock()
-        for _, v := range incidents {
-            if v.ProjectID != projectId {
-                continue
-            }
+        for _, key := range incidentsByProject[projectId] {
+            v := incidents[key]
             if claims != nil && !hasRole(claims, "super_admin") {
                 if t, ok := claims["tenant"].(string); ok {
                     if v.TenantID != t {
@@ -1144,14 +1180,10 @@ func signalsHandler(w http.ResponseWriter, r *http.Request) {
             }
         }
         // Publish to Redis for detection engine to consume
-        raddr := os.Getenv("REDIS_ADDR")
-        if raddr == "" {
-            raddr = "redis:6379"
-        }
-        rdb := redis.NewClient(&redis.Options{Addr: raddr})
         b, _ := json.Marshal(s)
-        _ = rdb.Publish(r.Context(), "signals", b).Err()
-        _ = rdb.Close()
+        if globalRedis != nil {
+            _ = globalRedis.Publish(r.Context(), "signals", b).Err()
+        }
         
         key := s.TenantID + ":" + s.ProjectID + ":" + s.Service
         incidentMu.Lock()
@@ -1172,6 +1204,11 @@ func signalsHandler(w http.ResponseWriter, r *http.Request) {
                 Evidence:   []types.Signal{s},
             }
             incidents[key] = inc
+            incidentsByID[inc.ID] = key
+            incidentsByProject[inc.ProjectID] = append(incidentsByProject[inc.ProjectID], key)
+            if len(incidents) > 1000 {
+                evictOldestIncidents(100)
+            }
             
             // Save new incident to PostgreSQL
             go func(incident types.Incident) {
@@ -1633,6 +1670,10 @@ func main() {
         log.Println("api-gateway: global db pool initialized")
     }
     initCancel()
+
+    // Initialize global Redis client — shared across all handlers
+    initRedis()
+    log.Println("api-gateway: global redis client initialized")
 
     mux := http.NewServeMux()
     mux.HandleFunc("/health", healthHandler)
@@ -2100,58 +2141,90 @@ func createProjectHandler(w http.ResponseWriter, r *http.Request) {
         createdEnvs = append(createdEnvs, envResp{ID: eid, Name: e, Namespace: ns})
     }
 
-    // If services are provided, write them to graph-manager
+    // If services are provided, write them to graph-manager concurrently
     if len(body.Services) > 0 {
         go func() {
             gmURL := os.Getenv("GRAPH_MANAGER_URL")
             if gmURL == "" {
                 gmURL = "http://graph-manager:8086"
             }
+
+            eg, _ := errgroup.WithContext(context.Background())
+            sem := make(chan struct{}, 10) // max 10 concurrent HTTP calls
+
             for _, svc := range body.Services {
+                svc := svc
                 svcName, _ := svc["name"].(string)
                 if svcName == "" {
                     continue
                 }
                 for _, e := range envs {
-                    ns := fmt.Sprintf("%s:%s", body.Slug, e)
-                    nodePayload := map[string]interface{}{
-                        "id": fmt.Sprintf("svc_%s", strings.ReplaceAll(svcName, "-", "_")),
-                        "name": svcName, "type": "SERVICE",
-                        "statusClass": "2xx", "latencyP95": 100, "errorRate": 0.0,
-                    }
-                    nodeBody, _ := json.Marshal(nodePayload)
-                    req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", gmURL, ns), strings.NewReader(string(nodeBody)))
-                    req.Header.Set("Content-Type", "application/json")
-                    resp, err := http.DefaultClient.Do(req)
-                    if err == nil {
-                        resp.Body.Close()
-                    }
-                }
-                // Create edges for dependencies
-                deps, _ := svc["dependencies"].([]interface{})
-                for _, dep := range deps {
-                    depName, _ := dep.(string)
-                    if depName == "" {
-                        continue
-                    }
-                    for _, e := range envs {
+                    e := e
+                    sem <- struct{}{}
+                    eg.Go(func() error {
+                        defer func() { <-sem }()
                         ns := fmt.Sprintf("%s:%s", body.Slug, e)
-                        edgePayload := map[string]interface{}{
-                            "id":   fmt.Sprintf("edge_%s_%s", strings.ReplaceAll(svcName, "-", "_"), strings.ReplaceAll(depName, "-", "_")),
-                            "from": fmt.Sprintf("svc_%s", strings.ReplaceAll(svcName, "-", "_")),
-                            "to":   fmt.Sprintf("svc_%s", strings.ReplaceAll(depName, "-", "_")),
-                            "type": "CALLS", "confidence": 0.9, "successRatio": 0.99,
+                        nodePayload := map[string]interface{}{
+                            "id":          fmt.Sprintf("svc_%s", strings.ReplaceAll(svcName, "-", "_")),
+                            "name":        svcName,
+                            "type":        "SERVICE",
+                            "statusClass": "2xx",
+                            "latencyP95":  100,
+                            "errorRate":   0.0,
                         }
-                        edgeBody, _ := json.Marshal(edgePayload)
-                        req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", gmURL, ns), strings.NewReader(string(edgeBody)))
+                        nodeBody, _ := json.Marshal(nodePayload)
+                        req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", gmURL, ns), strings.NewReader(string(nodeBody)))
+                        if err != nil {
+                            return nil
+                        }
                         req.Header.Set("Content-Type", "application/json")
                         resp, err := http.DefaultClient.Do(req)
                         if err == nil {
                             resp.Body.Close()
                         }
+                        return nil
+                    })
+                }
+
+                // Create edges for dependencies
+                deps, _ := svc["dependencies"].([]interface{})
+                for _, dep := range deps {
+                    dep := dep
+                    depName, _ := dep.(string)
+                    if depName == "" {
+                        continue
+                    }
+                    for _, e := range envs {
+                        e := e
+                        sem <- struct{}{}
+                        eg.Go(func() error {
+                            defer func() { <-sem }()
+                            ns := fmt.Sprintf("%s:%s", body.Slug, e)
+                            edgePayload := map[string]interface{}{
+                                "id":           fmt.Sprintf("edge_%s_%s", strings.ReplaceAll(svcName, "-", "_"), strings.ReplaceAll(depName, "-", "_")),
+                                "from":         fmt.Sprintf("svc_%s", strings.ReplaceAll(svcName, "-", "_")),
+                                "to":           fmt.Sprintf("svc_%s", strings.ReplaceAll(depName, "-", "_")),
+                                "type":         "CALLS",
+                                "confidence":   0.9,
+                                "successRatio": 0.99,
+                            }
+                            edgeBody, _ := json.Marshal(edgePayload)
+                            req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", gmURL, ns), strings.NewReader(string(edgeBody)))
+                            if err != nil {
+                                return nil
+                            }
+                            req.Header.Set("Content-Type", "application/json")
+                            resp, err := http.DefaultClient.Do(req)
+                            if err == nil {
+                                resp.Body.Close()
+                            }
+                            return nil
+                        })
                     }
                 }
             }
+            _ = eg.Wait()
+
             // Update project metadata to PUBLISHED
             if gdb := getDB(); gdb != nil {
                 ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
@@ -2404,6 +2477,18 @@ func listTenantProjectsHandler(w http.ResponseWriter, r *http.Request) {
     }
     rows.Close()
 
+    // Build O(1) lookup indexes after consolidating projects
+    projectByID := make(map[string]*projectItem, len(projectBySlug))
+    envNamesByProject := make(map[string]map[string]bool, len(projectBySlug))
+    for _, p := range projectBySlug {
+        projectByID[p.ID] = p
+        envNames := make(map[string]bool, len(p.Environments))
+        for _, e := range p.Environments {
+            envNames[e.Name] = true
+        }
+        envNamesByProject[p.Slug] = envNames
+    }
+
     // Also load environments from the environments table
     envRows, envErr := conn.Query(ctx, `
         SELECT e.id, e.name, e.project_id, COALESCE(e.graph_namespace, '') 
@@ -2415,35 +2500,19 @@ func listTenantProjectsHandler(w http.ResponseWriter, r *http.Request) {
         for envRows.Next() {
             var eid, ename, epid, ens string
             if envRows.Scan(&eid, &ename, &epid, &ens) == nil {
-                // Find the project this belongs to
-                for _, p := range projectBySlug {
-                    matchesProject := p.ID == epid
-                    if !matchesProject {
-                        for _, env := range p.Environments {
-                            if env.ID == epid {
-                                matchesProject = true
-                                break
-                            }
-                        }
+                // O(1) lookup of the project by project_id
+                p := projectByID[epid]
+                if p == nil {
+                    continue
+                }
+                // Check if this env already exists using the pre-built name set
+                if !envNamesByProject[p.Slug][ename] {
+                    ns := ens
+                    if ns == "" {
+                        ns = fmt.Sprintf("%s:%s", p.Slug, ename)
                     }
-                    if matchesProject {
-                        // Check if this env already exists
-                        found := false
-                        for _, existing := range p.Environments {
-                            if existing.Name == ename {
-                                found = true
-                                break
-                            }
-                        }
-                        if !found {
-                            ns := ens
-                            if ns == "" {
-                                ns = fmt.Sprintf("%s:%s", p.Slug, ename)
-                            }
-                            p.Environments = append(p.Environments, envItem{ID: eid, Name: ename, Namespace: ns})
-                        }
-                        break
-                    }
+                    p.Environments = append(p.Environments, envItem{ID: eid, Name: ename, Namespace: ns})
+                    envNamesByProject[p.Slug][ename] = true
                 }
             }
         }
@@ -3133,9 +3202,10 @@ func codeContextHandler(w http.ResponseWriter, r *http.Request) {
     ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
     defer cancel()
 
-    // Read repo config for this service from project metadata
+    // Read slug and repo config for this service from project metadata in a single query
+    var slug string
     var metaRaw []byte
-    _ = db.QueryRow(ctx, `SELECT COALESCE(metadata, '{}') FROM projects WHERE id=$1`, projectID).Scan(&metaRaw)
+    _ = db.QueryRow(ctx, `SELECT COALESCE(slug,''), COALESCE(metadata, '{}') FROM projects WHERE id=$1`, projectID).Scan(&slug, &metaRaw)
     var meta map[string]json.RawMessage
     _ = json.Unmarshal(metaRaw, &meta)
 
@@ -3144,13 +3214,12 @@ func codeContextHandler(w http.ResponseWriter, r *http.Request) {
         _ = json.Unmarshal(reposRaw, &repos)
     }
 
-    repoURL := ""
-    for _, r := range repos {
-        if r.ServiceID == serviceID {
-            repoURL = r.RepoURL
-            break
-        }
+    // Build a map for O(1) lookup by serviceID
+    repoByServiceID := make(map[string]string, len(repos))
+    for _, repo := range repos {
+        repoByServiceID[repo.ServiceID] = repo.RepoURL
     }
+    repoURL := repoByServiceID[serviceID]
 
     // Query graph-manager for GITCOMMIT nodes linked to this service via IMPLEMENTS
     // These are populated by the code-indexer service after each git index run.
@@ -3168,9 +3237,7 @@ func codeContextHandler(w http.ResponseWriter, r *http.Request) {
     if gmURL == "" {
         gmURL = "http://graph-manager:8086"
     }
-    // Resolve project namespace from slug
-    var slug string
-    _ = db.QueryRow(ctx, `SELECT COALESCE(slug,'') FROM projects WHERE id=$1`, projectID).Scan(&slug)
+    // Namespace was resolved from slug in the combined query above
     namespace := slug + ":prod"
 
     // Fetch graph nodes for this namespace and filter GITCOMMIT nodes for this service

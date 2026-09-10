@@ -76,12 +76,13 @@ export default function IncidentsPage() {
     skip: !tenantId,
   })
 
-  // Update URL when project selection changes
+  // Update URL when project selection changes (avoid redundant navigation)
+  const currentProjectParam = searchParams?.get("project")
   useEffect(() => {
-    if (selectedProjectId) {
-      router.push(`/dashboard/incidents?project=${selectedProjectId}`)
+    if (selectedProjectId && selectedProjectId !== currentProjectParam) {
+      router.replace(`/dashboard/incidents?project=${selectedProjectId}`)
     }
-  }, [selectedProjectId, router])
+  }, [selectedProjectId, currentProjectParam, router])
 
   // Reset pagination when any filter changes
   useEffect(() => {
@@ -162,7 +163,10 @@ export default function IncidentsPage() {
 
   const statuses: (IncidentStatus | "")[] = ["", "OPEN", "ACKNOWLEDGED", "RESOLVED"]
 
-  const selectedProject = projectsData?.projects?.find(p => p.id === selectedProjectId)
+  const selectedProject = useMemo(
+    () => projectsData?.projects?.find(p => p.id === selectedProjectId),
+    [projectsData, selectedProjectId]
+  )
 
   return (
     <div>

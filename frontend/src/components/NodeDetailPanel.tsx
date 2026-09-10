@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { X, AlertCircle, Activity, Clock, TrendingUp, GitBranch, ExternalLink, Wrench, CheckCircle2, Zap, Code, ArrowRight, ArrowLeft, Database, Layers, Server, Globe, Rocket, ChevronRight, ShieldOff } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { CodeContextPanel } from "@/components/CodeContextPanel"
@@ -143,8 +143,10 @@ export function NodeDetailPanel({ node, incidents, onClose, projectId, allNodes 
   const isUnhealthy = !isHealthy && !isDegraded
 
   // Compute direct dependencies (what this node calls → outbound)
-  const callsIds = edges.filter(e => e.from === node.id).map(e => e.to)
-  const calledByIds = edges.filter(e => e.to === node.id).map(e => e.from)
+  const { callsIds, calledByIds } = useMemo(() => ({
+    callsIds:    edges.filter(e => e.from === node.id).map(e => e.to),
+    calledByIds: edges.filter(e => e.to   === node.id).map(e => e.from),
+  }), [edges, node.id])
 
   // Request path: how does a user request reach this service?
   const { data: requestPath } = useGetRequestPathQuery(
@@ -157,12 +159,17 @@ export function NodeDetailPanel({ node, incidents, onClose, projectId, allNodes 
     { skip: !projectId || activeTab !== "dependencies" }
   )
 
-  const nodeIncidents = incidents.filter(
-    (inc) => inc.service === node.name || inc.service === node.id ||
-             inc.rootCauseCandidate === node.name || inc.rootCauseCandidate === node.id
-  )
-  const openIncidents = nodeIncidents.filter((i) => i.status === "OPEN")
-  const wasTransient = isHealthy && nodeIncidents.filter(i => i.status === "RESOLVED").length > 0 && openIncidents.length === 0
+  const { nodeIncidents, openIncidents, wasTransient } = useMemo(() => {
+    const nodeIncidents = incidents.filter(
+      (inc) => inc.service === node.name || inc.service === node.id ||
+               inc.rootCauseCandidate === node.name || inc.rootCauseCandidate === node.id
+    )
+    const openIncidents = nodeIncidents.filter((i) => i.status === "OPEN")
+    const wasTransient = isHealthy &&
+      nodeIncidents.some(i => i.status === "RESOLVED") &&
+      openIncidents.length === 0
+    return { nodeIncidents, openIncidents, wasTransient }
+  }, [incidents, node.id, node.name, isHealthy])
 
   const TABS: { id: Tab; label: string; badge?: number }[] = [
     { id: "overview",     label: "Overview" },

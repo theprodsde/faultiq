@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -632,68 +633,86 @@ func extractRustFunctions(content string) []funcInfo {
 // ─── Graph-manager writer ───────────────────────────────────────────────────
 
 func (idx *Indexer) writeToGraph(ctx context.Context, namespace string, nodes []CodeNode, edges []CodeEdge) error {
-	// Write nodes
+	// Write nodes concurrently — up to 8 in-flight requests at a time
+	eg, egCtx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, 8)
 	for _, n := range nodes {
-		// Convert CodeNode to the graphclient.Node format graph-manager expects
-		gNode := map[string]interface{}{
-			"id":          n.ID,
-			"name":        n.Name,
-			"type":        n.Type,
-			"serviceId":   n.ServiceID,
-			"statusClass": "2xx", // code nodes don't have runtime status
-			"latencyP95":  0,
-			"tags":        []string{n.Type},
-		}
-		if n.File != "" {
-			gNode["file"] = n.File
-		}
-		if n.CommitHash != "" {
-			gNode["commitHash"] = n.CommitHash
-		}
-		if n.Author != "" {
-			gNode["author"] = n.Author
-		}
-		if n.Message != "" {
-			gNode["message"] = n.Message
-		}
-		if n.Timestamp != "" {
-			gNode["timestamp"] = n.Timestamp
-		}
-		body, _ := json.Marshal(gNode)
-		url := fmt.Sprintf("%s/nodes?namespace=%s", idx.graphManagerURL, namespace)
-		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := idx.httpClient.Do(req)
-		if err != nil {
-			log.Printf("code-indexer: write node %s: %v", n.ID, err)
-			continue
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		n := n
+		sem <- struct{}{}
+		eg.Go(func() error {
+			defer func() { <-sem }()
+			// Convert CodeNode to the graphclient.Node format graph-manager expects
+			gNode := map[string]interface{}{
+				"id":          n.ID,
+				"name":        n.Name,
+				"type":        n.Type,
+				"serviceId":   n.ServiceID,
+				"statusClass": "2xx", // code nodes don't have runtime status
+				"latencyP95":  0,
+				"tags":        []string{n.Type},
+			}
+			if n.File != "" {
+				gNode["file"] = n.File
+			}
+			if n.CommitHash != "" {
+				gNode["commitHash"] = n.CommitHash
+			}
+			if n.Author != "" {
+				gNode["author"] = n.Author
+			}
+			if n.Message != "" {
+				gNode["message"] = n.Message
+			}
+			if n.Timestamp != "" {
+				gNode["timestamp"] = n.Timestamp
+			}
+			body, _ := json.Marshal(gNode)
+			nodeURL := fmt.Sprintf("%s/nodes?namespace=%s", idx.graphManagerURL, namespace)
+			req, _ := http.NewRequestWithContext(egCtx, "POST", nodeURL, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := idx.httpClient.Do(req)
+			if err != nil {
+				log.Printf("code-indexer: write node %s: %v", n.ID, err)
+				return nil // node failures are logged but non-fatal
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			return nil
+		})
 	}
+	eg.Wait() //nolint:errcheck — goroutines always return nil
 
-	// Write edges
+	// Write edges concurrently — up to 8 in-flight requests at a time
+	eg2, egCtx2 := errgroup.WithContext(ctx)
+	sem2 := make(chan struct{}, 8)
 	for _, e := range edges {
-		gEdge := map[string]interface{}{
-			"id":           e.ID,
-			"from":         e.From,
-			"to":           e.To,
-			"type":         e.Type,
-			"confidence":   1.0,
-			"successRatio": 1.0,
-		}
-		body, _ := json.Marshal(gEdge)
-		url := fmt.Sprintf("%s/edges?namespace=%s", idx.graphManagerURL, namespace)
-		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := idx.httpClient.Do(req)
-		if err != nil {
-			log.Printf("code-indexer: write edge %s: %v", e.ID, err)
-			continue
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		e := e
+		sem2 <- struct{}{}
+		eg2.Go(func() error {
+			defer func() { <-sem2 }()
+			gEdge := map[string]interface{}{
+				"id":           e.ID,
+				"from":         e.From,
+				"to":           e.To,
+				"type":         e.Type,
+				"confidence":   1.0,
+				"successRatio": 1.0,
+			}
+			body, _ := json.Marshal(gEdge)
+			edgeURL := fmt.Sprintf("%s/edges?namespace=%s", idx.graphManagerURL, namespace)
+			req, _ := http.NewRequestWithContext(egCtx2, "POST", edgeURL, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := idx.httpClient.Do(req)
+			if err != nil {
+				log.Printf("code-indexer: write edge %s: %v", e.ID, err)
+				return nil // edge failures are logged but non-fatal
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			return nil
+		})
 	}
+	eg2.Wait() //nolint:errcheck — goroutines always return nil
 	return nil
 }
 
@@ -1021,14 +1040,22 @@ func runIndexService(ctx context.Context, indexer *Indexer, serviceMapFile, serv
 	if err != nil {
 		return
 	}
+	// Build a flat O(1) index of service ID → (project, service) to avoid O(P×S) scan
+	type svcProjectPair struct {
+		project ProjectEntry
+		svc     ServiceEntry
+	}
+	svcByID := make(map[string]svcProjectPair)
 	for _, project := range sm.Projects {
 		for _, svc := range project.Services {
-			if svc.ID == serviceID && svc.Repo != "" {
-				if err := indexer.IndexService(ctx, project, svc); err != nil {
-					log.Printf("code-indexer: error indexing %s: %v", serviceID, err)
-				}
-				return
+			if svc.Repo != "" {
+				svcByID[svc.ID] = svcProjectPair{project: project, svc: svc}
 			}
+		}
+	}
+	if pair, ok := svcByID[serviceID]; ok {
+		if err := indexer.IndexService(ctx, pair.project, pair.svc); err != nil {
+			log.Printf("code-indexer: error indexing %s: %v", serviceID, err)
 		}
 	}
 }

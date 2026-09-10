@@ -333,13 +333,17 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges, mounted])
 
+  // O(1) lookup maps for node/edge patch effect
+  const nodeById = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes])
+  const edgeById = useMemo(() => new Map(edges.map(e => [`${e.from}-${e.to}`, e])), [edges])
+
   // Update node health colors when incidentMap changes — without destroying the graph
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || !cy.container()) return
     cy.nodes().forEach((ele: any) => {
       const nodeId = ele.id()
-      const node = nodes.find((n) => n.id === nodeId)
+      const node = nodeById.get(nodeId)
       if (!node) return
       const errRate = node.runtimeState?.errorRate || 0
       const incidentEntry = incidentMap[node.name] || incidentMap[node.id]
@@ -357,13 +361,13 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
     // Also update edge success ratios if they changed
     cy.edges().forEach((ele: any) => {
       const edgeId = ele.id()
-      const edge = edges.find((e) => `${e.from}-${e.to}` === edgeId)
+      const edge = edgeById.get(edgeId)
       if (edge && edge.successRatio !== undefined) {
         ele.data("successRatio", edge.successRatio)
       }
     })
     try { cy.style().update() } catch {}
-  }, [incidentMap, nodes, edges])
+  }, [incidentMap, nodeById, edgeById])
 
   // Handle dark mode theme change — update stylesheet colors without re-layout
   useEffect(() => {
@@ -372,6 +376,13 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
     // Force style recalculation — Cytoscape mappers re-evaluate on style().update()
     try { cy.style().update() } catch {}
   }, [isDark])
+
+  // Stats overlay counts — memoized to avoid repeated filter passes in JSX
+  const { openCount, ackCount, failingCount } = useMemo(() => ({
+    openCount:    incidentStates.filter(s => s.status === "OPEN").length,
+    ackCount:     incidentStates.filter(s => s.status === "ACKNOWLEDGED").length,
+    failingCount: nodes.filter(n => (n.runtimeState?.errorRate ?? 0) > 0.5).length,
+  }), [incidentStates, nodes])
 
   // Get selected node data for tooltip
   const selectedNodeData = selectedNode ? nodes.find((n) => n.id === selectedNode) : null
@@ -452,19 +463,19 @@ export function InteractiveGraphCytoscape({ nodes, edges, nodeMap, incidentState
           <span className="px-2 py-1 rounded text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 shadow-sm">
             {edges.length} edges
           </span>
-          {incidentStates.filter(s => s.status === "OPEN").length > 0 && (
+          {openCount > 0 && (
             <span className="px-2 py-1 rounded text-xs bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-600 dark:text-red-400 shadow-sm font-medium animate-pulse">
-              🔴 {incidentStates.filter(s => s.status === "OPEN").length} incident{incidentStates.filter(s => s.status === "OPEN").length !== 1 ? "s" : ""}
+              🔴 {openCount} incident{openCount !== 1 ? "s" : ""}
             </span>
           )}
-          {incidentStates.filter(s => s.status === "ACKNOWLEDGED").length > 0 && (
+          {ackCount > 0 && (
             <span className="px-2 py-1 rounded text-xs bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 text-yellow-600 dark:text-yellow-400 shadow-sm font-medium">
-              🟡 {incidentStates.filter(s => s.status === "ACKNOWLEDGED").length} acknowledged
+              🟡 {ackCount} acknowledged
             </span>
           )}
-          {nodes.filter(n => (n.runtimeState?.errorRate ?? 0) > 0.5).length > 0 && incidentStates.length === 0 && (
+          {failingCount > 0 && incidentStates.length === 0 && (
             <span className="px-2 py-1 rounded text-xs bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-600 dark:text-red-400 shadow-sm font-medium">
-              ⚠ {nodes.filter(n => (n.runtimeState?.errorRate ?? 0) > 0.5).length} failing
+              ⚠ {failingCount} failing
             </span>
           )}
         </div>
