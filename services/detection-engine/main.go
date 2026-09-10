@@ -71,6 +71,15 @@ func init() {
     prometheus.MustRegister(bfsDurationMs)
 }
 
+// incidentEventPool recycles the per-signal map used for Redis incident_created events.
+// Every signal that creates a new incident allocates one map; pooling avoids GC pressure
+// on the hot path.  Maps are cleared before reuse so no stale keys survive.
+var incidentEventPool = sync.Pool{
+    New: func() interface{} {
+        return make(map[string]interface{}, 12) // pre-size to typical field count
+    },
+}
+
 // deployGate tracks an active deployment health gate.
 type deployGate struct {
     serviceID string
@@ -613,13 +622,20 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
         return
     }
 
-    // ── FAST PATH: BFS detection on in-memory graph (<5ms for typical graphs) ──
+    // ── FAST PATH: detection on in-memory graph (<5ms for typical graphs) ──
+    // Use Dijkstra weighted traversal when edge details (SuccessRatio) are available;
+    // fall back to BFS for graphs without edge-level metrics.
     // Check the BFS cache first — same graph version means the traversal result is identical.
     bfsStart := time.Now()
     impacted := []string{s.Service}
     suspects, bfsCached := d.graphCache.GetBFSResult(namespace, s.Service, graphVersion)
     if !bfsCached {
-        suspects = DetectSuspects(g, impacted, 5, reverseEdges)
+        hasWeights := len(g.EdgeDetails) > 0
+        if hasWeights {
+            suspects = DetectSuspectsWeighted(g, reverseEdges, impacted, 5)
+        } else {
+            suspects = DetectSuspects(g, impacted, 5, reverseEdges)
+        }
         d.graphCache.SetBFSResult(namespace, s.Service, graphVersion, suspects)
     }
     bfsDurationMs.Observe(float64(time.Since(bfsStart).Milliseconds()))
@@ -666,25 +682,29 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     incidentID := fmt.Sprintf("inc-%d", time.Now().UnixMilli())
 
     // ── FAST PATH: Publish to Redis FIRST for instant frontend notification (<2ms) ──
-    // This is the key latency optimization: notify the UI before doing DB writes
-    incidentEvent := map[string]interface{}{
-        "type":            "incident_created",
-        "incidentId":      incidentID,
-        "service":         s.Service,
-        "projectId":       projectID,
-        "tenantId":        tenantID,
-        "faultType":       string(faultType),
-        "statusClass":     s.StatusClass,
-        "errorRate":       s.ErrorRate,
-        "latencyP95":      s.LatencyP95,
-        "suspects":        suspects,
-        "rootCause":       s.Service, // preliminary — RCA ranker refines async
-        "confidence":      0.8,
-        "status":          "OPEN",
-        "recommendations": recommendations,
-        "detectedInMs":    time.Since(startTime).Milliseconds(),
+    // This is the key latency optimization: notify the UI before doing DB writes.
+    // Reuse a pooled map to avoid per-signal heap allocation; clear stale keys first.
+    incidentEvent := incidentEventPool.Get().(map[string]interface{})
+    for k := range incidentEvent {
+        delete(incidentEvent, k)
     }
+    incidentEvent["type"] = "incident_created"
+    incidentEvent["incidentId"] = incidentID
+    incidentEvent["service"] = s.Service
+    incidentEvent["projectId"] = projectID
+    incidentEvent["tenantId"] = tenantID
+    incidentEvent["faultType"] = string(faultType)
+    incidentEvent["statusClass"] = s.StatusClass
+    incidentEvent["errorRate"] = s.ErrorRate
+    incidentEvent["latencyP95"] = s.LatencyP95
+    incidentEvent["suspects"] = suspects
+    incidentEvent["rootCause"] = s.Service // preliminary — RCA ranker refines async
+    incidentEvent["confidence"] = 0.8
+    incidentEvent["status"] = "OPEN"
+    incidentEvent["recommendations"] = recommendations
+    incidentEvent["detectedInMs"] = time.Since(startTime).Milliseconds()
     eventJSON, _ := json.Marshal(incidentEvent)
+    incidentEventPool.Put(incidentEvent) // safe: map fully consumed by Marshal
     _ = d.rdb.Publish(ctx, "incident_events", eventJSON).Err()
 
     // Record signal in history for SLO tracking (fire-and-forget)

@@ -16,6 +16,7 @@ type Playbook struct {
 type Store struct {
     mapping    map[string][]Playbook
     sortedKeys []string
+    ac         *AhoCorasick
 }
 
 func NewStoreFromFile(path string) (*Store, error) {
@@ -32,14 +33,38 @@ func NewStoreFromFile(path string) (*Store, error) {
         keys = append(keys, k)
     }
     sort.Strings(keys)
-    return &Store{mapping: m, sortedKeys: keys}, nil
+    patterns := make([]string, 0, len(m))
+    for k := range m {
+        patterns = append(patterns, k)
+    }
+    return &Store{mapping: m, sortedKeys: keys, ac: NewAhoCorasick(patterns)}, nil
 }
 
 func (s *Store) Recommend(symptom string) []Playbook {
+    // 1. Exact match (fastest path)
     if p, ok := s.mapping[symptom]; ok {
         return p
     }
-    // Prefix lookup via binary search (O(log n))
+
+    // 2. Aho-Corasick scan — finds ALL patterns that appear as substrings of symptom.
+    //    Merges playbooks for every distinct matching key, enabling compound symptoms like
+    //    "high-latency+connection-refused" to match both "high-latency" and "connection-refused".
+    if s.ac != nil {
+        seen := make(map[string]struct{})
+        var results []Playbook
+        for _, key := range s.ac.Search(symptom) {
+            if _, already := seen[key]; already {
+                continue
+            }
+            seen[key] = struct{}{}
+            results = append(results, s.mapping[key]...)
+        }
+        if len(results) > 0 {
+            return results
+        }
+    }
+
+    // 3. Binary-search prefix fallback (kept for backward compatibility)
     i := sort.SearchStrings(s.sortedKeys, symptom)
     // check forward: symptom is a prefix of sortedKeys[i]
     if i < len(s.sortedKeys) && strings.HasPrefix(s.sortedKeys[i], symptom) {

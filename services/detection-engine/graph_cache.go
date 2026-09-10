@@ -184,5 +184,17 @@ func convertFromRemote(g *graphclient.Graph) *Graph {
 	for k, arr := range g.Edges {
 		lg.Edges[k] = append([]string{}, arr...)
 	}
+	if len(g.EdgeDetails) > 0 {
+		lg.EdgeDetails = make(map[string]*EdgeDetail, len(g.EdgeDetails))
+		for k, ed := range g.EdgeDetails {
+			if ed == nil {
+				continue
+			}
+			lg.EdgeDetails[k] = &EdgeDetail{
+				SuccessRatio: ed.SuccessRatio,
+				Confidence:   ed.Confidence,
+			}
+		}
+	}
 	return lg
 }

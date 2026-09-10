@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,53 +338,73 @@ func postCallGraphEdges(graphManagerURL, namespace string, spans []otelSpan) {
 		}
 	}
 
-	// Ensure a node exists for every service seen in these traces.
-	// graph-manager uses ON CONFLICT DO NOTHING so this is idempotent.
+	// Post nodes concurrently — graph-manager uses ON CONFLICT DO NOTHING so idempotent.
+	egNodes, egNodeCtx := errgroup.WithContext(ctx)
+	semNodes := make(chan struct{}, 8)
 	for svc := range seenSvcs {
-		node := map[string]interface{}{
-			"id":          sanitizeServiceID(svc),
-			"name":        svc,
-			"type":        "SERVICE",
-			"statusClass": "2xx",
-			"latencyP95":  0,
-		}
-		body, _ := json.Marshal(node)
-		u := fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", graphManagerURL, url.QueryEscape(namespace))
-		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
+		svc := svc
+		semNodes <- struct{}{}
+		egNodes.Go(func() error {
+			defer func() { <-semNodes }()
+			node := map[string]interface{}{
+				"id":          sanitizeServiceID(svc),
+				"name":        svc,
+				"type":        "SERVICE",
+				"statusClass": "2xx",
+				"latencyP95":  0,
+			}
+			body, _ := json.Marshal(node)
+			u := fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", graphManagerURL, url.QueryEscape(namespace))
+			req, err := http.NewRequestWithContext(egNodeCtx, "POST", u, bytes.NewReader(body))
+			if err != nil {
+				return nil // non-fatal
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Printf("otel-receiver: post node %s failed: %v", svc, err)
+				return nil // non-fatal
+			}
 			resp.Body.Close()
-		}
+			return nil
+		})
 	}
+	_ = egNodes.Wait()
 
-	// Post every unique CALLS edge.
+	// Post edges concurrently.
+	egEdges, egEdgeCtx := errgroup.WithContext(ctx)
+	semEdges := make(chan struct{}, 8)
 	for _, edge := range edges {
-		payload := map[string]interface{}{
-			"id":           "otel-" + edge.From + "-" + edge.To,
-			"from":         sanitizeServiceID(edge.From),
-			"to":           sanitizeServiceID(edge.To),
-			"type":         "CALLS",
-			"confidence":   0.95,
-			"successRatio": 0.99,
-		}
-		body, _ := json.Marshal(payload)
-		u := fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", graphManagerURL, url.QueryEscape(edge.Namespace))
-		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Printf("otel-receiver: post edge %s→%s failed: %v", edge.From, edge.To, err)
-			continue
-		}
-		resp.Body.Close()
+		edge := edge
+		semEdges <- struct{}{}
+		egEdges.Go(func() error {
+			defer func() { <-semEdges }()
+			payload := map[string]interface{}{
+				"id":           "otel-" + edge.From + "-" + edge.To,
+				"from":         sanitizeServiceID(edge.From),
+				"to":           sanitizeServiceID(edge.To),
+				"type":         "CALLS",
+				"confidence":   0.95,
+				"successRatio": 0.99,
+			}
+			body, _ := json.Marshal(payload)
+			u := fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", graphManagerURL, url.QueryEscape(edge.Namespace))
+			req, err := http.NewRequestWithContext(egEdgeCtx, "POST", u, bytes.NewReader(body))
+			if err != nil {
+				return nil // non-fatal
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Printf("otel-receiver: post edge %s→%s failed: %v", edge.From, edge.To, err)
+				return nil // non-fatal
+			}
+			resp.Body.Close()
+			return nil
+		})
 	}
+	_ = egEdges.Wait()
+
 	if len(edges) > 0 {
 		log.Printf("otel-receiver: posted %d call edges to graph-manager (namespace=%s)", len(edges), namespace)
 	}

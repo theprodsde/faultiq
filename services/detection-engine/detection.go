@@ -1,6 +1,10 @@
 package main
 
-import "container/list"
+import (
+    "container/heap"
+    "container/list"
+    "sort"
+)
 
 // Node represents a node in the detection graph.
 type Node struct {
@@ -10,10 +14,17 @@ type Node struct {
     ErrorRate   float64 // 0.0–1.0
 }
 
+// EdgeDetail holds the edge-level metrics used for weighted traversal.
+type EdgeDetail struct {
+    SuccessRatio float64 // 0.0 = always failing, 1.0 = perfectly healthy
+    Confidence   float64 // 0.0–1.0 observation confidence
+}
+
 // Graph holds adjacency and nodes
 type Graph struct {
-    Nodes map[string]*Node
-    Edges map[string][]string // from -> []to
+    Nodes       map[string]*Node
+    Edges       map[string][]string // from -> []to
+    EdgeDetails map[string]*EdgeDetail // "from->to" -> EdgeDetail (optional)
 }
 
 // DetectSuspects runs a BFS from impacted services and returns suspect node IDs.
@@ -73,4 +84,111 @@ func DetectSuspects(g *Graph, impacted []string, maxDepth int, reverseEdges map[
         out = append(out, k)
     }
     return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dijkstra-based weighted root-cause traversal
+// ─────────────────────────────────────────────────────────────────────────────
+
+// pqItem is an entry in the Dijkstra priority queue.
+type pqItem struct {
+    node  string
+    cost  float64 // lower cost = more suspicious (higher failure propagation)
+    index int
+}
+
+type priorityQueue []*pqItem
+
+func (pq priorityQueue) Len() int            { return len(pq) }
+func (pq priorityQueue) Less(i, j int) bool  { return pq[i].cost < pq[j].cost } // min-heap
+func (pq priorityQueue) Swap(i, j int) {
+    pq[i], pq[j] = pq[j], pq[i]
+    pq[i].index = i
+    pq[j].index = j
+}
+func (pq *priorityQueue) Push(x interface{}) {
+    item := x.(*pqItem)
+    item.index = len(*pq)
+    *pq = append(*pq, item)
+}
+func (pq *priorityQueue) Pop() interface{} {
+    old := *pq
+    n := len(old)
+    item := old[n-1]
+    *pq = old[:n-1]
+    return item
+}
+
+// DetectSuspectsWeighted runs Dijkstra backwards from the impacted services,
+// weighting edges by (1 - successRatio) so that unreliable edges are "cheaper"
+// to traverse (more suspicious). Returns suspect node IDs sorted by ascending
+// cost (index 0 = most suspicious root cause).
+func DetectSuspectsWeighted(g *Graph, reverseEdges map[string][]string, impacted []string, maxDepth int) []string {
+    dist := make(map[string]float64)
+    for _, id := range impacted {
+        dist[id] = 0
+    }
+
+    pq := &priorityQueue{}
+    heap.Init(pq)
+    for _, id := range impacted {
+        heap.Push(pq, &pqItem{node: id, cost: 0})
+    }
+
+    depth := make(map[string]int)
+    for _, id := range impacted {
+        depth[id] = 0
+    }
+
+    for pq.Len() > 0 {
+        item := heap.Pop(pq).(*pqItem)
+        if item.cost > dist[item.node] {
+            continue // stale entry
+        }
+        if depth[item.node] >= maxDepth {
+            continue
+        }
+        for _, caller := range reverseEdges[item.node] {
+            // Edge weight: unreliable edges (low successRatio) are cheap to traverse
+            edgeWeight := 0.5 // default when no edge details available
+            edgeKey := caller + "->" + item.node
+            if g.EdgeDetails != nil {
+                if ed, ok := g.EdgeDetails[edgeKey]; ok && ed != nil {
+                    edgeWeight = 1.0 - ed.SuccessRatio // 0=perfectly healthy, 1=always failing
+                    if edgeWeight < 0.01 {
+                        edgeWeight = 0.01 // avoid zero-weight loops
+                    }
+                }
+            }
+            newCost := dist[item.node] + edgeWeight
+            if prev, seen := dist[caller]; !seen || newCost < prev {
+                dist[caller] = newCost
+                depth[caller] = depth[item.node] + 1
+                heap.Push(pq, &pqItem{node: caller, cost: newCost})
+            }
+        }
+    }
+
+    // Collect suspects (nodes reached but not in the original impacted set)
+    impactedSet := make(map[string]struct{}, len(impacted))
+    for _, id := range impacted {
+        impactedSet[id] = struct{}{}
+    }
+    type scoredNode struct {
+        id   string
+        cost float64
+    }
+    var suspects []scoredNode
+    for id, cost := range dist {
+        if _, isImpacted := impactedSet[id]; !isImpacted {
+            suspects = append(suspects, scoredNode{id, cost})
+        }
+    }
+    sort.Slice(suspects, func(i, j int) bool { return suspects[i].cost < suspects[j].cost })
+
+    result := make([]string, len(suspects))
+    for i, s := range suspects {
+        result[i] = s.id
+    }
+    return result
 }
