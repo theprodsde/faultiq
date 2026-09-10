@@ -534,7 +534,7 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     namespace := d.resolveNamespace(ctx, projectID, s.Environment)
 
     // ── FAST PATH: Get graph from in-memory cache (no HTTP, <1ms) ──
-    g, reverseEdges := d.graphCache.GetWithReverse(ctx, namespace)
+    g, reverseEdges, graphVersion := d.graphCache.GetWithReverse(ctx, namespace)
     
     // Apply signal status to the impacted node
     impactedNode, nodeExists := g.Nodes[s.Service]
@@ -591,9 +591,14 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
     }
 
     // ── FAST PATH: BFS detection on in-memory graph (<5ms for typical graphs) ──
+    // Check the BFS cache first — same graph version means the traversal result is identical.
     bfsStart := time.Now()
     impacted := []string{s.Service}
-    suspects := DetectSuspects(g, impacted, 5, reverseEdges)
+    suspects, bfsCached := d.graphCache.GetBFSResult(namespace, s.Service, graphVersion)
+    if !bfsCached {
+        suspects = DetectSuspects(g, impacted, 5, reverseEdges)
+        d.graphCache.SetBFSResult(namespace, s.Service, graphVersion, suspects)
+    }
     bfsDurationMs.Observe(float64(time.Since(bfsStart).Milliseconds()))
 
     // ── Deduplication: check if an incident already exists ──

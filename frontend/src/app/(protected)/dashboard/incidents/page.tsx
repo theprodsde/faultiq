@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useListIncidentsQuery } from "@/store/services"
 import { useTenant } from "@/contexts/tenant-context"
 import { useListProjectsQuery } from "@/store/services"
@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSearchParams, useRouter } from "next/navigation"
 import type { IncidentListItem, IncidentStatus } from "@/types/api"
 import ClientDate from "@/components/ClientDate"
@@ -166,6 +167,15 @@ export default function IncidentsPage() {
 
     return list
   }, [pageIncidents, dateRange, minConfidence, sortOrder])
+
+  const parentRef = useRef<HTMLDivElement>(null)
+
+  const rowVirtualizer = useVirtualizer({
+    count: filteredIncidents.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 140,
+    overscan: 5,
+  })
 
   const statuses: (IncidentStatus | "")[] = ["", "OPEN", "ACKNOWLEDGED", "RESOLVED"]
 
@@ -350,66 +360,95 @@ export default function IncidentsPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-3">
-          {filteredIncidents.map((incident, idx) => (
-            <motion.div
-              key={incident.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: idx * 0.04 }}
+        <>
+          {/* Virtualized incident list */}
+          <div
+            ref={parentRef}
+            style={{ height: "calc(100vh - 320px)", overflowY: "auto" }}
+            className="rounded-xl"
+          >
+            <div
+              style={{
+                height: rowVirtualizer.getTotalSize(),
+                position: "relative",
+              }}
             >
-              <Link href={`/dashboard/incidents/${incident.id}?project=${selectedProjectId}`}>
-                <Card className="p-5 hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer transition-all group">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-2">
-                        <Badge variant={STATUS_COLORS[incident.status]} className="text-xs">
-                          {incident.status}
-                        </Badge>
-                        {incident.environment && incident.environment !== "prod" && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
-                            {incident.environment}
-                          </span>
-                        )}
-                        {incident.phase && incident.phase !== "RESOLVED" && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
-                            {incident.phase}
-                          </span>
-                        )}
-                        <span className="text-xs text-slate-400 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          <ClientDate iso={typeof incident.detectedAt === "number" ? new Date(incident.detectedAt).toISOString() : incident.detectedAt as string} />
-                        </span>
-                      </div>
+              {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+                const incident = filteredIncidents[virtualItem.index]
+                return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualItem.start}px)`,
+                      paddingBottom: "12px",
+                    }}
+                  >
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <Link href={`/dashboard/incidents/${incident.id}?project=${selectedProjectId}`}>
+                        <Card className="p-5 hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer transition-all group">
+                          <div className="flex items-start gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                <Badge variant={STATUS_COLORS[incident.status]} className="text-xs">
+                                  {incident.status}
+                                </Badge>
+                                {incident.environment && incident.environment !== "prod" && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                                    {incident.environment}
+                                  </span>
+                                )}
+                                {incident.phase && incident.phase !== "RESOLVED" && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                                    {incident.phase}
+                                  </span>
+                                )}
+                                <span className="text-xs text-slate-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  <ClientDate iso={typeof incident.detectedAt === "number" ? new Date(incident.detectedAt).toISOString() : incident.detectedAt as string} />
+                                </span>
+                              </div>
 
-                      <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                        <Target className="w-4 h-4 text-slate-400 shrink-0" />
-                        Service: <span className="text-blue-600 dark:text-blue-400">{incident.service}</span>
-                      </p>
+                              <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                                <Target className="w-4 h-4 text-slate-400 shrink-0" />
+                                Service: <span className="text-blue-600 dark:text-blue-400">{incident.service}</span>
+                              </p>
 
-                      {incident.rootCauseCandidate && (
-                        <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
-                          Root cause: <span className="font-semibold text-orange-600 dark:text-orange-400">{incident.rootCauseCandidate}</span>
-                        </p>
-                      )}
+                              {incident.rootCauseCandidate && (
+                                <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
+                                  Root cause: <span className="font-semibold text-orange-600 dark:text-orange-400">{incident.rootCauseCandidate}</span>
+                                </p>
+                              )}
 
-                      <div className="mt-2">
-                        <ConfidenceBar value={incident.confidence} />
-                      </div>
+                              <div className="mt-2">
+                                <ConfidenceBar value={incident.confidence} />
+                              </div>
 
-                      <p className="text-xs text-slate-500 mt-1">
-                        {incident.evidenceCount} evidence item{incident.evidenceCount !== 1 ? "s" : ""}
-                      </p>
-                    </div>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {incident.evidenceCount} evidence item{incident.evidenceCount !== 1 ? "s" : ""}
+                              </p>
+                            </div>
 
-                    <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 transition-colors shrink-0 mt-1" />
+                            <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 transition-colors shrink-0 mt-1" />
+                          </div>
+                        </Card>
+                      </Link>
+                    </motion.div>
                   </div>
-                </Card>
-              </Link>
-            </motion.div>
-          ))}
+                )
+              })}
+            </div>
+          </div>
 
-          {/* Cursor pagination: load more */}
+          {/* Cursor pagination: load more — outside the virtualized scroll container */}
           {data?.hasMore && !isFetching && (
             <div className="mt-4 flex justify-center">
               <button
@@ -425,7 +464,7 @@ export default function IncidentsPage() {
               <Loading text="Loading more…" />
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   )

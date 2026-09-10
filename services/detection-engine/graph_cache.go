@@ -17,6 +17,15 @@ type GraphCache struct {
 	graphs   map[string]*cachedGraph
 	gp       GraphProvider
 	sfGroup  singleflight.Group
+	bfsMu    sync.RWMutex
+	bfsCache map[string]bfsCacheEntry // key: "namespace:serviceID"
+}
+
+// bfsCacheEntry holds a cached BFS result tied to a specific graph snapshot version.
+type bfsCacheEntry struct {
+	suspects     []string
+	cachedAt     time.Time
+	graphVersion int64 // matches cachedGraph.fetchedAt.UnixNano()
 }
 
 type cachedGraph struct {
@@ -29,8 +38,9 @@ const graphCacheTTL = 30 * time.Second // refresh graph every 30s
 
 func NewGraphCache(gp GraphProvider) *GraphCache {
 	return &GraphCache{
-		graphs: make(map[string]*cachedGraph),
-		gp:     gp,
+		graphs:   make(map[string]*cachedGraph),
+		gp:       gp,
+		bfsCache: make(map[string]bfsCacheEntry),
 	}
 }
 
@@ -58,9 +68,11 @@ func (c *GraphCache) Get(ctx context.Context, namespace string) *Graph {
 	return c.fetchAndCache(ctx, namespace)
 }
 
-// GetWithReverse returns the cached graph and its precomputed reverse edge map.
+// GetWithReverse returns the cached graph, its precomputed reverse edge map, and the graph
+// version (fetchedAt.UnixNano()). The version is used to tie BFS cache entries to a specific
+// graph snapshot; when the graph refreshes the version changes and BFS caches auto-invalidate.
 // If not cached or stale, behaves like Get (stale-while-revalidate).
-func (c *GraphCache) GetWithReverse(ctx context.Context, namespace string) (*Graph, map[string][]string) {
+func (c *GraphCache) GetWithReverse(ctx context.Context, namespace string) (*Graph, map[string][]string, int64) {
 	c.mu.RLock()
 	entry, ok := c.graphs[namespace]
 	c.mu.RUnlock()
@@ -74,18 +86,45 @@ func (c *GraphCache) GetWithReverse(ctx context.Context, namespace string) (*Gra
 				})
 			}()
 		}
-		return entry.graph, entry.reverseEdges
+		return entry.graph, entry.reverseEdges, entry.fetchedAt.UnixNano()
 	}
 
-	g := c.fetchAndCache(ctx, namespace)
-	// Re-read entry to get reverseEdges after fetch
+	c.fetchAndCache(ctx, namespace)
+	// Re-read entry to get reverseEdges and version after fetch
 	c.mu.RLock()
 	entry, ok = c.graphs[namespace]
 	c.mu.RUnlock()
-	if ok && entry.reverseEdges != nil {
-		return g, entry.reverseEdges
+	if ok && entry.graph != nil {
+		return entry.graph, entry.reverseEdges, entry.fetchedAt.UnixNano()
 	}
-	return g, buildReverseEdges(g.Edges)
+	empty := &Graph{Nodes: make(map[string]*Node), Edges: make(map[string][]string)}
+	return empty, buildReverseEdges(empty.Edges), 0
+}
+
+// GetBFSResult returns a cached BFS result for (namespace, serviceID) if one exists and
+// was computed against the same graph version. Returns (nil, false) on cache miss.
+func (c *GraphCache) GetBFSResult(namespace, serviceID string, graphVersion int64) ([]string, bool) {
+	key := namespace + ":" + serviceID
+	c.bfsMu.RLock()
+	entry, ok := c.bfsCache[key]
+	c.bfsMu.RUnlock()
+	if !ok || entry.graphVersion != graphVersion {
+		return nil, false
+	}
+	return entry.suspects, true
+}
+
+// SetBFSResult stores a BFS result keyed by (namespace, serviceID) and the graph version
+// at which it was computed. The entry is automatically stale once the graph refreshes.
+func (c *GraphCache) SetBFSResult(namespace, serviceID string, graphVersion int64, suspects []string) {
+	key := namespace + ":" + serviceID
+	c.bfsMu.Lock()
+	c.bfsCache[key] = bfsCacheEntry{
+		suspects:     suspects,
+		cachedAt:     time.Now(),
+		graphVersion: graphVersion,
+	}
+	c.bfsMu.Unlock()
 }
 
 func (c *GraphCache) refresh(namespace string) {
