@@ -4,16 +4,16 @@ services:
       context: .
       dockerfile: ./services/api-gateway/Dockerfile
     environment:
-      - AUTH_MODE=jwks
-      - JWKS_URL=http://keycloak:8080/realms/faultiq/protocol/openid-connect/certs
-      - JWKS_REFRESH_INTERVAL=1m
+      - AUTH_MODE=${AUTH_MODE:-jwks}
+      - JWKS_URL=${JWKS_URL:-http://keycloak:8080/realms/faultiq/protocol/openid-connect/certs}
+      - JWKS_REFRESH_INTERVAL=${JWKS_REFRESH_INTERVAL:-1m}
       # Optional strict validation for issuer and audience
-      - AUTH_ISSUER=http://localhost:8081/realms/faultiq
-      - AUTH_AUDIENCE=
+      - AUTH_ISSUER=${AUTH_ISSUER:-http://localhost:8081/realms/faultiq}
+      - AUTH_AUDIENCE=${AUTH_AUDIENCE:-}
       - API_KEY_SECRET=${API_KEY_SECRET:-}    # set this to enable CI/CD auth
       - DEFAULT_TENANT=${DEFAULT_TENANT:-acme-corp}
     ports:
-      - "8080:8080"
+      - "${API_GATEWAY_PUBLIC_PORT:-8080}:8080"
     restart: unless-stopped
     deploy:
       resources:
@@ -38,8 +38,8 @@ services:
       NEO4J_AUTH: "${NEO4J_AUTH}"
       NEO4J_ACCEPT_LICENSE_AGREEMENT: "${NEO4J_ACCEPT_LICENSE_AGREEMENT}"
     ports:
-      - "7474:7474" # HTTP
-      - "7687:7687" # Bolt
+      - "${NEO4J_HTTP_PUBLIC_PORT:-7474}:7474" # HTTP
+      - "${NEO4J_BOLT_PUBLIC_PORT:-7687}:7687" # Bolt
     volumes:
       - neo4j_data:/data
     restart: unless-stopped
@@ -60,10 +60,10 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:21.1.1
     environment:
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
     ports:
-      - "8081:8080"
+      - "${KEYCLOAK_PUBLIC_PORT:-8081}:8080"
     volumes:
       - ./scripts/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
     command: ["start-dev", "--http-enabled=true", "--import-realm"]
@@ -89,7 +89,7 @@ services:
       POSTGRES_DB: "${POSTGRES_DB}"
       POSTGRES_USER: "${POSTGRES_USER}"
     ports:
-      - "5434:5432"
+      - "${POSTGRES_PUBLIC_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -110,7 +110,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "${REDIS_PUBLIC_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -139,7 +139,7 @@ services:
       - REDIS_ADDR=${REDIS_ADDR}
       - GRAPH_MANAGER_ADDR=${GRAPH_MANAGER_ADDR}
     ports:
-      - "8086:8086"
+      - "${GRAPH_MANAGER_PUBLIC_PORT:-8086}:8086"
     depends_on:
       neo4j:
         condition: service_healthy
@@ -168,7 +168,7 @@ services:
       - REDIS_ADDR=${REDIS_ADDR}
       - INGESTION_PORT=${INGESTION_PORT}
     ports:
-      - "8085:8085"
+      - "${SIGNAL_INGESTION_PUBLIC_PORT:-8085}:8085"
     depends_on:
       redis:
         condition: service_healthy
@@ -193,18 +193,18 @@ services:
       dockerfile: ./services/detection-engine/Dockerfile
     environment:
       - PG_DSN=${PG_DSN}
-      - REDIS_ADDR=redis:6379
+      - REDIS_ADDR=${REDIS_ADDR}
       - GRAPH_MANAGER_URL=${GRAPH_MANAGER_URL}
       - NAMESPACE=${NAMESPACE}
-      - RCA_RANKER_URL=http://rca-ranker:8087
+      - RCA_RANKER_URL=${RCA_RANKER_URL:-http://rca-ranker:8087}
       - NOTIFICATION_WEBHOOK_URL=${NOTIFICATION_WEBHOOK_URL:-}
       - P1_WEBHOOK_URL=${P1_WEBHOOK_URL:-}   # PagerDuty/OpsGenie for service-down and cascading
       # Slack/Teams for latency and transient faults
       - P2_WEBHOOK_URL=${P2_WEBHOOK_URL:-}
-      - CODE_INDEXER_URL=http://code-indexer:8092
-      - RECOMMENDATION_SERVICE_URL=http://recommendation:8090
-      - SLA_ESCALATION_MINUTES=30
-      - API_GATEWAY_URL=http://api-gateway:8080
+      - CODE_INDEXER_URL=${CODE_INDEXER_URL:-http://code-indexer:8092}
+      - RECOMMENDATION_SERVICE_URL=${RECOMMENDATION_SERVICE_URL:-http://recommendation:8090}
+      - SLA_ESCALATION_MINUTES=${SLA_ESCALATION_MINUTES:-30}
+      - API_GATEWAY_URL=${API_GATEWAY_URL:-http://api-gateway:8080}
     depends_on:
       neo4j:
         condition: service_healthy
@@ -253,11 +253,11 @@ services:
       context: .
       dockerfile: ./services/onboarding-worker/Dockerfile
     environment:
-      - REDIS_ADDR=redis:6379
+      - REDIS_ADDR=${REDIS_ADDR}
       - PG_DSN=${PG_DSN}
-      - GRAPH_MANAGER_URL=http://graph-manager:8086
-      - SERVICE_MAP_FILE=/etc/onboarding/service-map.yaml
-      - K8S_CONNECTOR_URL=http://k8s-connector:8093
+      - GRAPH_MANAGER_URL=${GRAPH_MANAGER_URL}
+      - SERVICE_MAP_FILE=${ONBOARDING_SERVICE_MAP_FILE:-/etc/onboarding/service-map.yaml}
+      - K8S_CONNECTOR_URL=${K8S_CONNECTOR_URL:-http://k8s-connector:8093}
     volumes:
       - ./scripts/service-map.yaml:/etc/onboarding/service-map.yaml:ro
     depends_on:
@@ -285,9 +285,9 @@ services:
       context: .
       dockerfile: ./services/demo-services/Dockerfile
     ports:
-      - "8091:8091"
+      - "${DEMO_SERVICES_PUBLIC_PORT:-8091}:8091"
     environment:
-      - DEMO_SERVICES_PORT=8091
+      - DEMO_SERVICES_PORT=${DEMO_SERVICES_PORT:-8091}
     restart: unless-stopped
     deploy:
       resources:
@@ -312,17 +312,17 @@ services:
       context: .
       dockerfile: ./services/code-indexer/Dockerfile
     environment:
-      - SERVICE_MAP_FILE=/etc/code-indexer/service-map.yaml
-      - GRAPH_MANAGER_URL=http://graph-manager:8086
+      - SERVICE_MAP_FILE=${CODE_INDEXER_SERVICE_MAP_FILE:-/etc/code-indexer/service-map.yaml}
+      - GRAPH_MANAGER_URL=${GRAPH_MANAGER_URL}
       - PG_DSN=${PG_DSN}
-      - INDEX_INTERVAL_MINUTES=60          # re-index every 60 minutes
-      - CODE_INDEXER_PORT=8092
+      - INDEX_INTERVAL_MINUTES=${INDEX_INTERVAL_MINUTES:-60}          # re-index every 60 minutes
+      - CODE_INDEXER_PORT=${CODE_INDEXER_PORT:-8092}
       # Optional: SSH key for private repos (mount as secret in production)
       # - GIT_SSH_COMMAND=ssh -i /etc/ssh/id_rsa -o StrictHostKeyChecking=no
     volumes:
       - ./scripts/service-map.yaml:/etc/code-indexer/service-map.yaml:ro
     ports:
-      - "8092:8092"
+      - "${CODE_INDEXER_PUBLIC_PORT:-8092}:8092"
     depends_on:
       graph-manager:
         condition: service_healthy
@@ -347,9 +347,9 @@ services:
       context: .
       dockerfile: ./services/health-poller/Dockerfile
     environment:
-      - SERVICE_MAP_FILE=/etc/health-poller/service-map.yaml
-      - SIGNAL_INGESTION_URL=http://signal-ingestion:8085
-      - POLL_INTERVAL_SECONDS=30
+      - SERVICE_MAP_FILE=${HEALTH_POLLER_SERVICE_MAP_FILE:-/etc/health-poller/service-map.yaml}
+      - SIGNAL_INGESTION_URL=${SIGNAL_INGESTION_URL:-http://signal-ingestion:8085}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-30}
     volumes:
       - ./scripts/service-map.yaml:/etc/health-poller/service-map.yaml:ro
     depends_on:
@@ -427,7 +427,7 @@ services:
       # Public-facing Keycloak URL used by the frontend proxy to rewrite issuer
       - AUTH_PUBLIC_URL=${NEXT_PUBLIC_AUTH_URL:-http://localhost:8081}
     ports:
-      - "4001:4001"
+      - "${FRONTEND_PUBLIC_PORT:-4001}:4001"
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -448,7 +448,7 @@ services:
     environment:
       - RECOMMENDATIONS_PATH=/recommendations.json
     ports:
-      - "8090:8090"
+      - "${RECOMMENDATION_PUBLIC_PORT:-8090}:8090"
     restart: unless-stopped
     deploy:
       resources:
@@ -470,11 +470,11 @@ services:
       dockerfile: ./services/rca-ranker/Dockerfile
     environment:
       - PG_DSN=${PG_DSN}
-      - RCA_RANKER_PORT=:8087
+      - RCA_RANKER_PORT=${RCA_RANKER_ADDR:-:8087}
       # Disable MPTCP and async preemption to fix SIGSEGV in Go runtime netpoll on Docker/macOS
       - GODEBUG=mptcpEnabled=0,asyncpreemptoff=1
     ports:
-      - "8087:8087"
+      - "${RCA_RANKER_PUBLIC_PORT:-8087}:8087"
     depends_on:
       postgres:
         condition: service_healthy
@@ -502,7 +502,7 @@ services:
       - KUBECONFIG_PATH=${KUBECONFIG_PATH:-}   # leave empty for in-cluster mode
       - K8S_CONNECTOR_API_KEY=${K8S_CONNECTOR_API_KEY:-}
     ports:
-      - "8093:8093"
+      - "${K8S_CONNECTOR_PUBLIC_PORT:-8093}:8093"
     restart: unless-stopped
     deploy:
       resources:
@@ -523,13 +523,13 @@ services:
       context: .
       dockerfile: ./services/otel-receiver/Dockerfile
     environment:
-      - SIGNAL_INGESTION_URL=http://signal-ingestion:8085
-      - OTEL_RECEIVER_PORT=4318
+      - SIGNAL_INGESTION_URL=${SIGNAL_INGESTION_URL:-http://signal-ingestion:8085}
+      - OTEL_RECEIVER_PORT=${OTEL_RECEIVER_PORT:-4318}
       - OTEL_API_KEY=${OTEL_API_KEY:-}   # leave empty to disable auth in dev
-      - GRAPH_MANAGER_URL=http://graph-manager:8086
+      - GRAPH_MANAGER_URL=${GRAPH_MANAGER_URL}
       - OTEL_DEFAULT_NAMESPACE=${OTEL_DEFAULT_NAMESPACE:-otel-auto:prod}
     ports:
-      - "4318:4318"    # standard OTel HTTP port
+      - "${OTEL_RECEIVER_PUBLIC_PORT:-4318}:4318"    # standard OTel HTTP port
     depends_on:
       signal-ingestion:
         condition: service_healthy

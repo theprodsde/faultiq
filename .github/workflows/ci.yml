@@ -16,7 +16,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "stable"   # always matches developer environment
+          # This is a multi-module repo with no root go.mod, so the default
+          # cache lookup (./go.sum) finds nothing. Key the cache off the real
+          # module sums instead.
           cache: true
+          cache-dependency-path: |
+            services/*/go.sum
+            pkg/graphclient/go.sum
 
       - name: Verify go.mod consistency
         # Fail if go.sum is out of sync (catches missing go.sum entries)
