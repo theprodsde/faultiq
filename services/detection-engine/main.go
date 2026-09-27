@@ -107,7 +107,8 @@ type Detector struct {
 func NewDetector(ctx context.Context) (*Detector, error) {
     gmURL := os.Getenv("GRAPH_MANAGER_URL")
     if gmURL == "" {
-        gmURL = "http://graph-manager:8086/api/v1/graphs"
+        // Base URL only — graphclient appends /api/v1/graphs itself.
+        gmURL = "http://graph-manager:8086"
     }
     ns := os.Getenv("NAMESPACE")
     if ns == "" {

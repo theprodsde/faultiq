@@ -21,6 +21,7 @@ jobs:
       - name: Verify go.mod consistency
         # Fail if go.sum is out of sync (catches missing go.sum entries)
         run: |
+          (cd pkg/graphclient && go mod verify) || exit 1
           for svc in detection-engine api-gateway rca-ranker signal-ingestion graph-manager \
                      code-indexer onboarding-worker health-poller k8s-connector; do
             echo "Checking $svc go.mod..."
@@ -49,6 +50,53 @@ jobs:
             echo "Vetting $svc..."
             (cd services/$svc && go vet ./...)
           done
+
+  migrations:
+    name: Migrations — Apply Clean, Then Re-Apply
+    runs-on: ubuntu-latest
+    # Migrations are load-bearing for the demo (the seed migration creates the
+    # tenants and projects a fresh stack needs), so prove they apply from empty
+    # and stay idempotent when re-run.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: faultiq
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply migrations to an empty database
+        env:
+          PG_DSN: postgres://postgres:postgres@localhost:5432/faultiq?sslmode=disable
+          PG_HOST: localhost
+          PG_PORT: "5432"
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          chmod +x scripts/migrations/run_migrations.sh
+          sh scripts/migrations/run_migrations.sh
+
+      - name: Re-apply to prove idempotency
+        env:
+          PG_DSN: postgres://postgres:postgres@localhost:5432/faultiq?sslmode=disable
+          PG_HOST: localhost
+          PG_PORT: "5432"
+        run: sh scripts/migrations/run_migrations.sh
+
+      - name: Assert the demo seed produced tenants and projects
+        env:
+          PG_DSN: postgres://postgres:postgres@localhost:5432/faultiq?sslmode=disable
+        run: |
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -tAc \
+            "SELECT count(*) FROM tenants"      | grep -qx '2'
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -tAc \
+            "SELECT count(*) FROM projects"     | grep -qx '2'
 
   frontend:
     name: Frontend — TypeScript & Audit

@@ -109,6 +109,12 @@ async function capture() {
   });
   const page = await context.newPage();
 
+  // Playwright records from context creation, so the Keycloak login ends up in
+  // front of the GIF. Record when the walkthrough actually starts so the encode
+  // step can cut everything before it.
+  const startedAt = Date.now();
+  let trimTo = 0;
+
   try {
     // ── 1. Log in ──────────────────────────────────────────────────────────
     console.log('[2/7] Logging in via Keycloak SSO...');
@@ -120,7 +126,8 @@ async function capture() {
     await page.click('input[type="submit"], button[type="submit"]');
     await page.waitForURL('**/dashboard**', { timeout: 30000 });
     await sleep(2500);
-    console.log('  Logged in successfully!\n');
+    trimTo = (Date.now() - startedAt) / 1000;
+    console.log(`  Logged in successfully! (trim point ${trimTo.toFixed(1)}s)\n`);
 
     // ── 2. Dashboard + service graph ───────────────────────────────────────
     console.log('[3/7] Capturing dashboard with live service graph...');
@@ -138,7 +145,18 @@ async function capture() {
 
     // ── 4. Inject fault and wait for the incident to reach TRIAGING ────────
     console.log('[5/7] Injecting fault and waiting for detection + RCA...');
-    const faultedAt = new Date().toISOString();
+
+    // Snapshot the incidents that already exist so the wait below can identify
+    // the new one by identity. Comparing timestamps instead is fragile: the
+    // health poller runs on its own 30s cadence, so "when I injected" does not
+    // line up with "when the incident was recorded".
+    const preExisting = new Set(
+      sql('SELECT id FROM incidents')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+
     await setServiceHealth(FAULTY_SERVICE, {
       statusClass: '5xx',
       errorRate: 0.85,
@@ -156,14 +174,17 @@ async function capture() {
 
     // Wait for the detection-engine to confirm a root cause and build the SOP.
     // TRIAGING is the phase that means "RCA ranked + playbook generated".
+    // Detection needs two poller cycles plus time to cross the confidence
+    // threshold, so allow ~5 minutes before giving up.
     const incidentId = await waitFor(
-      'incident reached TRIAGING (RCA ranked + SOP generated)',
+      'a new incident reached TRIAGING (RCA ranked + SOP generated)',
       () => {
         const row = sql(
-          `SELECT id FROM incidents WHERE detected_at > '${faultedAt}' AND phase = 'TRIAGING' ORDER BY detected_at DESC LIMIT 1`
-        );
-        return row || null;
-      }
+          `SELECT id FROM incidents WHERE phase = 'TRIAGING' ORDER BY detected_at DESC LIMIT 1`
+        ).trim();
+        return row && !preExisting.has(row) ? row : null;
+      },
+      300000
     );
     console.log(`  Incident ${incidentId} is in TRIAGING`);
 
@@ -215,15 +236,48 @@ async function capture() {
   }
 
   // ── Encode the recording to GIF ──────────────────────────────────────────
+  // Detection and auto-verification are genuinely slow (~90s each, gated on the
+  // 30s health-poller interval), so a 1:1 recording is mostly dead air. Cut the
+  // login off the front and time-compress the rest; the walkthrough still shows
+  // the real causal chain, just faster.
   try {
     const videos = fs.readdirSync(VIDEO_DIR).filter((f) => f.endsWith('.webm'));
     if (videos.length === 0) throw new Error('no video recorded');
     const videoPath = path.join(VIDEO_DIR, videos[0]);
+
+    const speed = Number(process.env.GIF_SPEED || 4);
+    const ss = Math.max(0, trimTo - 0.5);
+
+    // Single-pass GIF. A shared palette via palettegen/paletteuse was tried and
+    // was markedly worse here: the UI is a dark theme with smooth gradients, so
+    // dithering inflates the file instead of shrinking it. Controlling size with
+    // fps and width is both smaller and visually cleaner for this content.
+    const width = Number(process.env.GIF_WIDTH || 820);
+    const fps = Number(process.env.GIF_FPS || 12);
+    const vf = [
+      `setpts=${(1 / speed).toFixed(4)}*PTS`,
+      `fps=${fps}`,
+      `scale=${width}:-1:flags=lanczos`,
+    ].join(',');
+
+    // -ss before -i seeks fast; allow a beat of lead-in so the cut is clean.
     execSync(
-      `ffmpeg -y -i "${videoPath}" -vf "fps=10,scale=900:-1:flags=lanczos" -loop 0 "${DEMO_GIF}"`,
+      `ffmpeg -y -ss ${ss.toFixed(2)} -i "${videoPath}" -vf "${vf}" -loop 0 "${DEMO_GIF}"`,
       { stdio: 'ignore' }
     );
-    console.log(`  Demo GIF created: ${DEMO_GIF}`);
+
+    // ffprobe reports duration as a string.
+    const { format } = JSON.parse(
+      execSync(
+        `ffprobe -v error -show_entries format=duration -of json "${DEMO_GIF}"`,
+        { encoding: 'utf8' }
+      )
+    );
+    const duration = parseFloat(format.duration);
+    const kb = Math.round(fs.statSync(DEMO_GIF).size / 1024);
+    console.log(
+      `  Demo GIF created: ${DEMO_GIF} (${duration.toFixed(0)}s, ${kb} KB, ${speed}x speed)`
+    );
   } catch (e) {
     console.log(`  WARNING: could not create GIF (${e.message})`);
     process.exitCode = 1;

@@ -26,8 +26,11 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
       timeout: 3s
-      retries: 5
-      start_period: 5s
+      retries: 10
+      # The gateway fetches JWKS keys at boot and retries until Keycloak has
+      # finished importing the realm. A cold first run needs ~60s, so allow a
+      # generous window or `compose up` aborts on a startup race.
+      start_period: 120s
 
   neo4j:
     image: neo4j:5.8

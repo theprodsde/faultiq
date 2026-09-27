@@ -667,7 +667,7 @@ func (idx *Indexer) writeToGraph(ctx context.Context, namespace string, nodes []
 				gNode["timestamp"] = n.Timestamp
 			}
 			body, _ := json.Marshal(gNode)
-			nodeURL := fmt.Sprintf("%s/nodes?namespace=%s", idx.graphManagerURL, namespace)
+			nodeURL := fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", idx.graphManagerURL, namespace)
 			req, _ := http.NewRequestWithContext(egCtx, "POST", nodeURL, bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := idx.httpClient.Do(req)
@@ -699,7 +699,7 @@ func (idx *Indexer) writeToGraph(ctx context.Context, namespace string, nodes []
 				"successRatio": 1.0,
 			}
 			body, _ := json.Marshal(gEdge)
-			edgeURL := fmt.Sprintf("%s/edges?namespace=%s", idx.graphManagerURL, namespace)
+			edgeURL := fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", idx.graphManagerURL, namespace)
 			req, _ := http.NewRequestWithContext(egCtx2, "POST", edgeURL, bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := idx.httpClient.Do(req)
@@ -859,7 +859,8 @@ func main() {
 	}
 	graphManagerURL := os.Getenv("GRAPH_MANAGER_URL")
 	if graphManagerURL == "" {
-		graphManagerURL = "http://graph-manager:8086/api/v1/graphs"
+		// Base URL only — the graph API path is appended per call.
+		graphManagerURL = "http://graph-manager:8086"
 	}
 	intervalStr := os.Getenv("INDEX_INTERVAL_MINUTES")
 	interval := 60 * time.Minute // default: index every 60 minutes

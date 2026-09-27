@@ -126,7 +126,7 @@ func buildGraph(ctx context.Context, graphManagerURL string, project ProjectEntr
 				node.Type = "SERVICE"
 			}
 			nodeJSON, _ := json.Marshal(node)
-			nodeURL := fmt.Sprintf("%s/nodes?namespace=%s", graphManagerURL, ns)
+			nodeURL := fmt.Sprintf("%s/api/v1/graphs/nodes?namespace=%s", graphManagerURL, ns)
 			req, _ := http.NewRequestWithContext(egCtx, "POST", nodeURL, bytes.NewReader(nodeJSON))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := client.Do(req)
@@ -175,7 +175,7 @@ func buildGraph(ctx context.Context, graphManagerURL string, project ProjectEntr
 				SuccessRatio: 0.99,
 			}
 			edgeJSON, _ := json.Marshal(edge)
-			edgeURL := fmt.Sprintf("%s/edges?namespace=%s", graphManagerURL, ns)
+			edgeURL := fmt.Sprintf("%s/api/v1/graphs/edges?namespace=%s", graphManagerURL, ns)
 			req, _ := http.NewRequestWithContext(egCtx2, "POST", edgeURL, bytes.NewReader(edgeJSON))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := client.Do(req)
@@ -438,6 +438,80 @@ func processJob(ctx context.Context, conn *pgx.Conn, graphManagerURL, serviceMap
 	_, _ = conn.Exec(ctx, `UPDATE onboarding_jobs SET status=$1 WHERE id=$2`, status, jobID)
 }
 
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
+
+// graphIsEmpty reports whether graph-manager currently holds no namespaces.
+// It returns (true, nil) only on a definitive "no graphs" answer; a transport
+// or decode failure returns an error so the caller retries rather than
+// mistaking an unreachable graph-manager for an empty one.
+func graphIsEmpty(ctx context.Context, graphManagerURL string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		graphManagerURL+"/api/v1/graphs/namespaces", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("graph-manager returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		Namespaces []string `json:"namespaces"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, err
+	}
+	return len(payload.Namespaces) == 0, nil
+}
+
+// bootstrapDemoGraph enqueues one service-map job when the graph is empty.
+// It backs off and retries because graph-manager may still be starting, and
+// exits as soon as a graph exists so a real stack is never re-seeded.
+func bootstrapDemoGraph(ctx context.Context, rdb *redis.Client, graphManagerURL, serviceMapFile string) {
+	if _, err := os.Stat(serviceMapFile); err != nil {
+		log.Printf("onboarding: bootstrap skipped, no service map at %s", serviceMapFile)
+		return
+	}
+
+	delay := 3 * time.Second
+	for attempt := 1; attempt <= 20; attempt++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+
+		empty, err := graphIsEmpty(ctx, graphManagerURL)
+		if err != nil {
+			log.Printf("onboarding: bootstrap waiting for graph-manager (attempt %d): %v", attempt, err)
+			continue
+		}
+		if !empty {
+			log.Printf("onboarding: bootstrap skipped, graph already has data")
+			return
+		}
+
+		// project_id empty → processJob builds every project in the service map.
+		jobID := fmt.Sprintf("bootstrap-%d", time.Now().UnixNano())
+		job, _ := json.Marshal(map[string]interface{}{
+			"job_id":     jobID,
+			"project_id": "",
+			"mode":       "service-map",
+			"sources":    map[string]interface{}{"serviceMapFile": serviceMapFile},
+		})
+		if err := rdb.LPush(ctx, "onboarding_jobs", string(job)).Err(); err != nil {
+			log.Printf("onboarding: bootstrap enqueue failed (attempt %d): %v", attempt, err)
+			continue
+		}
+		log.Printf("onboarding: empty graph detected, enqueued bootstrap job=%s from %s", jobID, serviceMapFile)
+		return
+	}
+	log.Printf("onboarding: bootstrap gave up after retries, onboard a project manually")
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -453,7 +527,8 @@ func main() {
 	}
 	graphManagerURL := os.Getenv("GRAPH_MANAGER_URL")
 	if graphManagerURL == "" {
-		graphManagerURL = "http://graph-manager:8086/api/v1/graphs"
+		// Base URL only — the graph API path is appended per call.
+		graphManagerURL = "http://graph-manager:8086"
 	}
 	serviceMapFile := os.Getenv("SERVICE_MAP_FILE")
 	if serviceMapFile == "" {
@@ -473,6 +548,14 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: raddr})
 	log.Printf("onboarding-worker: ready (redis=%s graphManager=%s mapFile=%s)",
 		raddr, graphManagerURL, serviceMapFile)
+
+	// On a fresh volume there is no graph, so nothing detects anything until a
+	// project is onboarded. Seed the demo service map automatically so
+	// `docker compose up` yields a working stack. Runs in the background and
+	// never blocks the job loop. Set ONBOARDING_BOOTSTRAP=false to disable.
+	if os.Getenv("ONBOARDING_BOOTSTRAP") != "false" {
+		go bootstrapDemoGraph(ctx, rdb, graphManagerURL, serviceMapFile)
+	}
 
 	for {
 		res, err := rdb.BLPop(ctx, 0, "onboarding_jobs").Result()

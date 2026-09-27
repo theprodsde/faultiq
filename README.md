@@ -26,12 +26,17 @@ FaultIQ is an open-source platform that detects faults in distributed systems, i
 **Try it live:**
 ```bash
 git clone https://github.com/theprodsde/faultiq && cd faultiq
+cp .env.example .env
 docker compose up --build
-# Open http://localhost:4001/dashboard/demo
-# Click "All healthy — continue" (Step 1), then "Fault ledger-service" (Step 2)
+# Wait ~90s, then open http://localhost:4001
+# Sign in: super / superpass
+# Go to /dashboard/demo → "All healthy — continue", then "Fault ledger-service"
 ```
 
-No terminal needed — the demo page has a one-click fault injection button.
+No terminal needed after startup — the demo page has a one-click fault injection
+button. On first boot the stack seeds the demo tenants and projects from
+`scripts/service-map.yaml` and builds the service graph automatically, so all
+services report `2xx` without any manual SQL.
 
 ---
 
@@ -71,6 +76,9 @@ Healing the service auto-resolves the incident and closes every SOP phase:
 
 ![Demo](docs/demo.gif)
 
+<sub>Real capture, time-compressed 4x. Detection and auto-verification genuinely
+take ~90s each, gated on the 30s health-poller interval.</sub>
+
 **To regenerate the screenshots and GIF:**
 
 ```bash
@@ -80,10 +88,14 @@ npx playwright install chromium
 npm run capture             # or: node scripts/capture-demo.js
 ```
 
-The script logs in through Keycloak SSO, injects a fault, waits for the
-detection engine to actually reach `TRIAGING` (rather than sleeping a fixed
-amount), screenshots the RCA and SOP views, then heals the service and waits
-for auto-resolution before encoding `docs/demo.gif`.
+The script logs in through Keycloak SSO, resets the simulated services, injects a
+fault, and waits for the detection engine to actually reach `TRIAGING` before
+shooting. It identifies the new incident by snapshotting the pre-existing
+incident IDs rather than comparing timestamps, since the health poller runs on
+its own 30s cadence and "when I injected" does not line up with "when the incident
+was recorded". It then screenshots the RCA and SOP views, heals the service, waits
+for auto-resolution, and encodes the GIF. Tune `GIF_SPEED`, `GIF_FPS` and
+`GIF_WIDTH` via the environment.
 
 ---
 

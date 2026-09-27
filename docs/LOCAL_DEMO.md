@@ -27,11 +27,20 @@ cp .env.example .env
 # 2. Start everything
 docker compose up --build
 
-# 3. Wait for healthy (takes ~60s on first run for Keycloak + Neo4j)
+# 3. Wait for healthy (takes ~90s on first run: Keycloak + Neo4j + image builds)
 docker compose ps
 
-# 4. Open in browser
+# 4. Open in browser and sign in with super / superpass
 open http://localhost:4001
+```
+
+On first boot the stack seeds the demo tenants and projects from
+`scripts/service-map.yaml` and the onboarding worker builds the graph
+automatically — you should see all services `2xx` on the dashboard within about a
+minute. To confirm the graph exists:
+
+```bash
+curl -s http://localhost:8086/api/v1/graphs/namespaces | jq .namespaces
 ```
 
 **Service URLs once running:**
@@ -40,7 +49,7 @@ open http://localhost:4001
 |---------|-----|---------|
 | Frontend | http://localhost:4001 | Main UI |
 | API Gateway | http://localhost:8080 | REST API |
-| Keycloak | http://localhost:8081 | Auth (admin/admin) |
+| Keycloak | http://localhost:8081 | Auth (login via the UI) |
 | Neo4j Browser | http://localhost:7474 | Graph database UI |
 | Signal Ingestion | http://localhost:8085 | SSE events endpoint |
 | Graph Manager | http://localhost:8086 | Graph read/write |
@@ -51,13 +60,20 @@ open http://localhost:4001
 
 ## Login Credentials
 
-These accounts are pre-configured in `scripts/keycloak/realm.json`:
+These accounts are pre-configured in `scripts/keycloak/realm.json`. Log in with the
+**username**, not the email address — the SSO form is a username/password form
+backed by Keycloak, not an email link.
 
-| Email | Password | Role | Tenant |
-|-------|----------|------|--------|
-| `admin@acme.com` | `admin123` | super_admin | acme-corp |
-| `operator@acme.com` | `admin123` | tenant_admin | acme-corp |
-| `dev@zen.com` | `admin123` | tenant_admin | zen-inc |
+| Username | Password | Role | Tenant |
+|----------|----------|------|--------|
+| `super` | `superpass` | super_admin | all |
+| `org-admin` | `orgadminpass` | tenant_admin | acme-corp |
+| `project-admin` | `projadminpass` | project_admin | acme-corp |
+| `analyst` | `analystpass` | analyst | acme-corp |
+| `viewer` | `viewerpass` | viewer | acme-corp |
+| `zen-admin` | `zenadminpass` | tenant_admin | zen-inc |
+
+The demo walkthrough uses `super` / `superpass`, since it needs to see every tenant.
 
 ---
 
@@ -129,11 +145,16 @@ projects:
 3. In the "Service Sources" step, paste the contents of your `service-map.yaml`
 4. Click "Import" — the onboarding worker reads the YAML and builds the graph
 
+> **The demo stack does this for you.** `docker compose up` seeds the tenants and
+> projects from `scripts/service-map.yaml` and the onboarding worker builds the
+> graph on first boot, so you only need the steps below to onboard a *new*
+> project of your own.
+
 **Via API (fastest for demo):**
 ```bash
-# Get a token first
+# Get a token first — note: username, not email
 TOKEN=$(curl -s -X POST http://localhost:8081/realms/faultiq/protocol/openid-connect/token \
-  -d "grant_type=password&client_id=faultiq-ui&username=admin@acme.com&password=admin123" \
+  -d "grant_type=password&client_id=faultiq-ui&username=super&password=superpass" \
   | jq -r '.access_token')
 
 # Create project
