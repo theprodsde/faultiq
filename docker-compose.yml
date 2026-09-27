@@ -382,13 +382,16 @@ services:
       dockerfile: Dockerfile
       args:
         # Build-time client-facing defaults (baked into the frontend bundle).
-        # Override these by setting the env vars on the host before building for prod.
-        NEXT_PUBLIC_API_GATEWAY_URL: "http://localhost:8080/api/v1"
-        NEXT_PUBLIC_WEBSOCKET_URL: "ws://localhost:8085"
-        NEXT_PUBLIC_AUTH_URL: "http://localhost:8081"
+        # These are browser-reachable URLs, so they use localhost plus the
+        # public port variables — changing a port in .env propagates here
+        # instead of silently leaving the bundle pointing at the old port.
+        NEXT_PUBLIC_API_GATEWAY_URL: "${NEXT_PUBLIC_API_GATEWAY_URL:-http://localhost:${API_GATEWAY_PUBLIC_PORT:-8080}/api/v1}"
+        NEXT_PUBLIC_WEBSOCKET_URL: "${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:${SIGNAL_INGESTION_PUBLIC_PORT:-8085}}"
+        NEXT_PUBLIC_AUTH_URL: "${NEXT_PUBLIC_AUTH_URL:-http://localhost:${KEYCLOAK_PUBLIC_PORT:-8081}}"
+        NEXT_PUBLIC_DEMO_SERVICES_URL: "${NEXT_PUBLIC_DEMO_SERVICES_URL:-http://localhost:${DEMO_SERVICES_PUBLIC_PORT:-8091}}"
         NEXT_PUBLIC_KEYCLOAK_REALM: "${NEXT_PUBLIC_KEYCLOAK_REALM:-faultiq}"
         NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: "${NEXT_PUBLIC_KEYCLOAK_CLIENT_ID:-faultiq-ui}"
-        NEXT_PUBLIC_HOST_URL: "${NEXT_PUBLIC_HOST_URL:-http://localhost:4001}"
+        NEXT_PUBLIC_HOST_URL: "${NEXT_PUBLIC_HOST_URL:-http://localhost:${FRONTEND_PUBLIC_PORT:-4001}}"
     container_name: faultiq-frontend
     restart: unless-stopped
     deploy:
@@ -400,11 +403,14 @@ services:
           memory: 256m
     environment:
       # Internal Docker network URLs for API calls
-      - NEXT_PUBLIC_API_GATEWAY_URL=http://localhost:8080/api/v1
-      - NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8085
-      - NEXT_PUBLIC_AUTH_URL=http://localhost:8081
+      - NEXT_PUBLIC_API_GATEWAY_URL=${NEXT_PUBLIC_API_GATEWAY_URL:-http://localhost:${API_GATEWAY_PUBLIC_PORT:-8080}/api/v1}
+      - NEXT_PUBLIC_WEBSOCKET_URL=${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:${SIGNAL_INGESTION_PUBLIC_PORT:-8085}}
+      - NEXT_PUBLIC_AUTH_URL=${NEXT_PUBLIC_AUTH_URL:-http://localhost:${KEYCLOAK_PUBLIC_PORT:-8081}}
+      # Browser-reachable base URL for the simulated demo services. The demo
+      # page calls this cross-origin, so demo-services serves CORS headers.
+      - NEXT_PUBLIC_DEMO_SERVICES_URL=${NEXT_PUBLIC_DEMO_SERVICES_URL:-http://localhost:${DEMO_SERVICES_PUBLIC_PORT:-8091}}
       # Status API used by the services-status page (defaults to API Gateway)
-      - NEXT_PUBLIC_STATUS_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_STATUS_API_URL=${NEXT_PUBLIC_STATUS_API_URL:-http://localhost:${API_GATEWAY_PUBLIC_PORT:-8080}}
       # Server/runtime addresses (used by Next server-side code inside the container)
       - SERVER_API_GATEWAY_URL=${SERVER_API_GATEWAY_URL:-http://api-gateway:8080/api/v1}
       - SERVER_AUTH_URL=${SERVER_AUTH_URL:-http://keycloak:8080}
@@ -412,17 +418,17 @@ services:
       - NEXT_PUBLIC_KEYCLOAK_REALM=${NEXT_PUBLIC_KEYCLOAK_REALM:-faultiq}
       - NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=${NEXT_PUBLIC_KEYCLOAK_CLIENT_ID:-faultiq-ui}
       # For browser redirect (important for OAuth callback)
-      - NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI=${NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI:-http://localhost:4001}
-      - NEXT_PUBLIC_HOST_URL=${NEXT_PUBLIC_HOST_URL:-http://localhost:4001}
+      - NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI=${NEXT_PUBLIC_KEYCLOAK_REDIRECT_URI:-http://localhost:${FRONTEND_PUBLIC_PORT:-4001}}
+      - NEXT_PUBLIC_HOST_URL=${NEXT_PUBLIC_HOST_URL:-http://localhost:${FRONTEND_PUBLIC_PORT:-4001}}
       # App settings
       - NEXT_PUBLIC_APP_ENV=${NEXT_PUBLIC_APP_ENV:-production}
-      - NEXT_PUBLIC_APP_NAME=FaultIQ
+      - NEXT_PUBLIC_APP_NAME=${NEXT_PUBLIC_APP_NAME:-FaultIQ}
       - NEXT_PUBLIC_ENABLE_ANALYTICS=${NEXT_PUBLIC_ENABLE_ANALYTICS:-false}
       - NEXT_PUBLIC_ENABLE_DARK_MODE=${NEXT_PUBLIC_ENABLE_DARK_MODE:-true}
       - NEXT_PUBLIC_ENABLE_API_EXPLORER=${NEXT_PUBLIC_ENABLE_API_EXPLORER:-true}
       - NEXT_PUBLIC_ENABLE_DOCUMENTATION=${NEXT_PUBLIC_ENABLE_DOCUMENTATION:-true}
       - NEXT_PUBLIC_ENABLE_MONITORING=${NEXT_PUBLIC_ENABLE_MONITORING:-true}
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - PORT=4001
       # Public-facing Keycloak URL used by the frontend proxy to rewrite issuer
       - AUTH_PUBLIC_URL=${NEXT_PUBLIC_AUTH_URL:-http://localhost:8081}
@@ -498,7 +504,7 @@ services:
       context: .
       dockerfile: ./services/k8s-connector/Dockerfile
     environment:
-      - PORT=8093
+      - PORT=${K8S_CONNECTOR_PORT:-8093}
       - KUBECONFIG_PATH=${KUBECONFIG_PATH:-}   # leave empty for in-cluster mode
       - K8S_CONNECTOR_API_KEY=${K8S_CONNECTOR_API_KEY:-}
     ports:

@@ -25,7 +25,8 @@ import { Card } from "@/components/ui/card"
 import ClientDate from "@/components/ClientDate"
 import type { IncidentListItem } from "@/types/api"
 
-// demo-services admin API is exposed on port 8091 locally
+// Browser-reachable base URL for the simulated services' admin API. Set via
+// NEXT_PUBLIC_DEMO_SERVICES_URL; compose derives it from DEMO_SERVICES_PUBLIC_PORT.
 const DEMO_API = process.env.NEXT_PUBLIC_DEMO_SERVICES_URL ?? "http://localhost:8091"
 
 // The three key services used in the demo fault scenario
