@@ -878,18 +878,33 @@ func getIncidentHandler(w http.ResponseWriter, r *http.Request) {
                 FaultType  string  `json:"faultType"`
             }
             triggerSignals := make([]TriggerSignal, 0, len(evidenceItems))
+            // The evidence array accumulates a row per signal, so the same service
+            // appears many times. Collapse to one row per node, keeping the highest
+            // confidence seen, and order strongest-first.
+            bestConfidence := make(map[string]float64, len(evidenceItems))
             for _, ev := range evidenceItems {
+                if ev.NodeID == "" {
+                    continue // evidence written before nodeId was recorded
+                }
+                if ev.Confidence > bestConfidence[ev.NodeID] {
+                    bestConfidence[ev.NodeID] = ev.Confidence
+                }
+            }
+            for nodeID, conf := range bestConfidence {
                 ft := "unknown"
-                if ev.Confidence > 0.7 {
+                if conf > 0.7 {
                     ft = "high-error-rate"
-                } else if ev.Confidence > 0.4 {
+                } else if conf > 0.4 {
                     ft = "latency-anomaly"
                 }
                 triggerSignals = append(triggerSignals, TriggerSignal{
-                    Service: ev.NodeID, NodeID: ev.NodeID,
-                    Confidence: ev.Confidence, FaultType: ft,
+                    Service: nodeID, NodeID: nodeID,
+                    Confidence: conf, FaultType: ft,
                 })
             }
+            sort.Slice(triggerSignals, func(i, j int) bool {
+                return triggerSignals[i].Confidence > triggerSignals[j].Confidence
+            })
             // If no evidence items, use the triggering service itself
             if len(triggerSignals) == 0 && service != "" {
                 ft := "high-error-rate"

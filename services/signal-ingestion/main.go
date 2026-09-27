@@ -20,6 +20,9 @@ type Signal struct {
     TenantID    string  `json:"tenantId"`
     Project     string  `json:"project"`
     ProjectID   string  `json:"projectId"`
+    // Namespace is forwarded from the emitting service when it already knows the
+    // target graph namespace, sparing the detection engine a lookup.
+    Namespace   string  `json:"namespace,omitempty"`
     Environment string  `json:"environment"`
     Service     string  `json:"service"`
     StatusClass string  `json:"statusClass"`

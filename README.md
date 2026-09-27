@@ -12,6 +12,81 @@ FaultIQ is an open-source platform that detects faults in distributed systems, i
 
 ---
 
+## Demo in 30 Seconds
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. Inject fault: ledger-service starts timing out              │
+│  2. Detection engine: BFS traversal → root cause = ledger-svc   │
+│  3. SOP playbook: "Check recent deploy" → "Inspect DB pool"     │
+│  4. Fix deployed → healthy signal → auto-resolved               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Try it live:**
+```bash
+git clone https://github.com/theprodsde/faultiq && cd faultiq
+docker compose up --build
+# Open http://localhost:4001/dashboard/demo
+# Click "All healthy — continue" (Step 1), then "Fault ledger-service" (Step 2)
+```
+
+No terminal needed — the demo page has a one-click fault injection button.
+
+---
+
+## Screenshots
+
+### Dashboard — Service Graph
+
+Every service shows live health projected onto the graph by the detection engine.
+
+![Dashboard](docs/screenshots/dashboard-graph.png)
+
+### Incident Detail — RCA + SOP Playbook
+
+Ranked root-cause candidates, then the SOP phase bar and generated playbook.
+
+![Incident Detail](docs/screenshots/incident-sop.png)
+
+![SOP Playbook](docs/screenshots/sop-playbook.png)
+
+### Demo Page — One-Click Fault Injection
+
+![Demo Page](docs/screenshots/demo-page.png)
+
+### Fault Injected → Auto-Resolution
+
+`ledger-service` goes red at 100% error rate while its callers stay healthy:
+
+![Fault Detected](docs/screenshots/fault-detected.png)
+
+Healing the service auto-resolves the incident and closes every SOP phase:
+
+![Resolved](docs/screenshots/resolved.png)
+
+---
+
+## Demo GIF
+
+![Demo](docs/demo.gif)
+
+**To regenerate the screenshots and GIF:**
+
+```bash
+docker compose up -d        # stack must be healthy first
+npm install                 # installs Playwright (dev-only)
+npx playwright install chromium
+npm run capture             # or: node scripts/capture-demo.js
+```
+
+The script logs in through Keycloak SSO, injects a fault, waits for the
+detection engine to actually reach `TRIAGING` (rather than sleeping a fixed
+amount), screenshots the RCA and SOP views, then heals the service and waits
+for auto-resolution before encoding `docs/demo.gif`.
+
+---
+
 ## How It Works
 
 ```
@@ -38,7 +113,7 @@ cp .env.example .env   # edit with your values
 docker compose up --build
 ```
 
-Open http://localhost:4001 · Login: `super` / `FaultIQ2026!`
+Open http://localhost:4001 · Login: `super` / `superpass`
 
 **Inject a demo fault in 3 commands:**
 ```bash

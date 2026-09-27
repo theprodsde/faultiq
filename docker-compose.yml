@@ -196,7 +196,8 @@ services:
       - RCA_RANKER_URL=http://rca-ranker:8087
       - NOTIFICATION_WEBHOOK_URL=${NOTIFICATION_WEBHOOK_URL:-}
       - P1_WEBHOOK_URL=${P1_WEBHOOK_URL:-}   # PagerDuty/OpsGenie for service-down and cascading
-      - P2_WEBHOOK_URL=${P2_WEBHOOK_URL:-}   # Slack/Teams for latency and transient faults
+      # Slack/Teams for latency and transient faults
+      - P2_WEBHOOK_URL=${P2_WEBHOOK_URL:-}
       - CODE_INDEXER_URL=http://code-indexer:8092
       - RECOMMENDATION_SERVICE_URL=http://recommendation:8090
       - SLA_ESCALATION_MINUTES=30
@@ -251,7 +252,7 @@ services:
     environment:
       - REDIS_ADDR=redis:6379
       - PG_DSN=${PG_DSN}
-      - GRAPH_MANAGER_URL=http://graph-manager:8086/api/v1/graphs
+      - GRAPH_MANAGER_URL=http://graph-manager:8086
       - SERVICE_MAP_FILE=/etc/onboarding/service-map.yaml
       - K8S_CONNECTOR_URL=http://k8s-connector:8093
     volumes:
@@ -309,7 +310,7 @@ services:
       dockerfile: ./services/code-indexer/Dockerfile
     environment:
       - SERVICE_MAP_FILE=/etc/code-indexer/service-map.yaml
-      - GRAPH_MANAGER_URL=http://graph-manager:8086/api/v1/graphs
+      - GRAPH_MANAGER_URL=http://graph-manager:8086
       - PG_DSN=${PG_DSN}
       - INDEX_INTERVAL_MINUTES=60          # re-index every 60 minutes
       - CODE_INDEXER_PORT=8092
@@ -508,7 +509,7 @@ services:
         reservations:
           memory: 64m
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8093/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8093/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -538,7 +539,7 @@ services:
         reservations:
           memory: 64m
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4318/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4318/health"]
       interval: 15s
       timeout: 5s
       retries: 3

@@ -28,6 +28,10 @@ type Signal struct {
     TenantID           string  `json:"tenantId"`
     Project            string  `json:"project"`
     ProjectID          string  `json:"projectId"`
+    // Namespace is the graph namespace the emitter already knows (e.g.
+    // "payments-platform:prod"). When present it is authoritative and no
+    // lookup is needed.
+    Namespace          string  `json:"namespace,omitempty"`
     Environment        string  `json:"environment"`
     Service            string  `json:"service"`
     StatusClass        string  `json:"statusClass"`
@@ -535,9 +539,19 @@ func (d *Detector) resolveNamespace(ctx context.Context, projectID, environment 
             d.nsCache.Store(cacheKey, ns)
             return ns
         }
+        // The emitter may send a service-map project id (e.g. "proj-payments-prod")
+        // that does not match the projects table id, so also try matching by name.
+        err = d.conn.QueryRow(ctx2,
+            "SELECT slug FROM projects WHERE slug=$1 OR lower(replace(name,' ','-'))=lower(replace($1,'-','')) LIMIT 1",
+            projectID).Scan(&slug)
+        if err == nil && slug != "" {
+            ns := fmt.Sprintf("%s:%s", slug, environment)
+            d.nsCache.Store(cacheKey, ns)
+            return ns
+        }
     }
 
-    // Fallback: sanitize common prefixes from projectID
+    // Last resort: sanitise the project id (e.g. "proj-payments-prod" → "payments-prod").
     pid := strings.TrimPrefix(projectID, "p_")
     pid = strings.TrimPrefix(pid, "proj-")
     return fmt.Sprintf("%s:%s", pid, environment)
@@ -562,8 +576,14 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
         return
     }
 
-    // Resolve namespace from projectID and environment
-    namespace := d.resolveNamespace(ctx, projectID, s.Environment)
+    // Resolve namespace: trust the namespace the emitter declared, then fall back
+    // to a projects-table slug lookup, then to sanitizing the project id.
+    var namespace string
+    if s.Namespace != "" {
+        namespace = s.Namespace
+    } else {
+        namespace = d.resolveNamespace(ctx, projectID, s.Environment)
+    }
 
     // ── FAST PATH: Get graph from in-memory cache (no HTTP, <1ms) ──
     g, reverseEdges, graphVersion := d.graphCache.GetWithReverse(ctx, namespace)
@@ -574,7 +594,14 @@ func (d *Detector) handleSignal(ctx context.Context, s Signal) {
         log.Printf("warning: signal service %s not found in namespace=%s graph", s.Service, namespace)
         return
     }
-    
+
+    // Project this observation onto the graph so the rest of the platform reads
+    // health from one place: RCA scoring pulls node.ErrorRate, the Service Graph
+    // UI renders node runtime state, and the ranker ranks on live numbers. The
+    // in-memory cache is deliberately not mutated (impactedNode is a shared
+    // pointer), so this persists via graph-manager, which also busts its cache.
+    d.persistNodeHealth(namespace, impactedNode, s)
+
     // Snapshot the previous state to detect transient vs persistent.
     // Do NOT write back to the shared struct — impactedNode is a pointer into
     // the shared graph cache and mutating it races with concurrent goroutines.
@@ -1113,6 +1140,29 @@ func (d *Detector) advancePhase(ctx context.Context, incidentID, projectID, tena
     }
 }
 
+// persistNodeHealth writes a service's latest observed health onto its graph
+// node. It is best-effort: a graph-manager hiccup must not drop the signal that
+// drives incident detection, so failures are logged and swallowed.
+func (d *Detector) persistNodeHealth(namespace string, node *Node, s Signal) {
+    writer, ok := d.gp.(NodeWriter)
+    if !ok {
+        return
+    }
+    // The health endpoint touches only health fields, so topology written during
+    // onboarding is safe even though the local Node carries just health data.
+    updated := &graphclient.Node{
+        ID:          node.ID,
+        StatusClass: s.StatusClass,
+        LatencyP95:  int(s.LatencyP95),
+        ErrorRate:   s.ErrorRate,
+    }
+    writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := writer.WriteNode(writeCtx, namespace, updated); err != nil {
+        log.Printf("warning: failed to persist health for %s to namespace=%s: %v", s.Service, namespace, err)
+    }
+}
+
 // accumulateEvidence increments evidence for a service on an existing incident,
 // re-scores all RCA candidates, and advances the SOP phase when confidence is sufficient.
 func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s Signal, namespace string, g *Graph, reverseEdges map[string][]string) {
@@ -1120,8 +1170,14 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
         return
     }
 
-    // 1. Append signal to evidence array and increment evidence_count for this candidate
+    // 1. Append signal to evidence array and increment evidence_count for this candidate.
+    // The evidence array is read by the API as {nodeId, confidence, faultType} — the
+    // same shape the initial suspect list uses — so every appended item must carry
+    // nodeId and confidence. Without them the UI renders blank service rows at 0%.
     evidenceItem := map[string]interface{}{
+        "nodeId":      s.Service,
+        "confidence":  s.ErrorRate,
+        "faultType":   string(ClassifyFault(s.StatusClass, s.ErrorRate, int(s.LatencyP95))),
         "service":     s.Service,
         "statusClass": s.StatusClass,
         "errorRate":   s.ErrorRate,
@@ -1504,6 +1560,15 @@ func (d *Detector) getWebhookURLForFault(ctx context.Context, incidentID string)
     }
     if webhookURL == "" {
         webhookURL = os.Getenv("NOTIFICATION_WEBHOOK_URL")
+    }
+    // Guard against unset-but-nonempty values (e.g. a stray comment captured in
+    // .env). Retrying a value that is not a real http(s) URL only produces noise.
+    if strings.TrimSpace(webhookURL) != "" {
+        if u, err := url.Parse(strings.TrimSpace(webhookURL)); err != nil ||
+            (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+            log.Printf("webhook URL for %s is not a valid http(s) URL — skipping notification", priority)
+            return "", priority
+        }
     }
     return webhookURL, priority
 }

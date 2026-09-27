@@ -259,6 +259,39 @@ func (m *Manager) WriteNode(ctx context.Context, namespace string, node *graphcl
     return err
 }
 
+// WriteNodeHealth records a service's latest observed health on an existing
+// graph node. Unlike WriteNode it touches only the health fields, so a telemetry
+// observation can never clobber the static topology (name, type, tags) that
+// onboarding wrote. Nodes are matched on id; an unknown id is a no-op so late
+// signals for removed services are dropped rather than resurrecting them.
+func (m *Manager) WriteNodeHealth(ctx context.Context, namespace string, node *graphclient.Node) error {
+    session := m.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+    defer session.Close(ctx)
+
+    _, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+        q := `MATCH (n {id: $id, namespace: $namespace})
+              SET n.statusClass = $statusClass, n.latencyP95 = $latencyP95,
+                  n.errorRate = $errorRate, n.updatedAt = timestamp()
+              RETURN n.id AS id`
+        params := map[string]any{
+            "id":          node.ID,
+            "namespace":   namespace,
+            "statusClass": node.StatusClass,
+            "latencyP95":  node.LatencyP95,
+            "errorRate":   node.ErrorRate,
+        }
+        return tx.Run(ctx, q, params)
+    })
+
+    // invalidate cache so readers see the new health immediately
+    if m.redis != nil && err == nil {
+        key := "graph:" + namespace
+        _ = m.redis.Del(ctx, key).Err()
+    }
+
+    return err
+}
+
 // WriteEdge creates or updates an edge in Neo4j
 func (m *Manager) WriteEdge(ctx context.Context, namespace string, edge *graphclient.Edge) error {
     session := m.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})

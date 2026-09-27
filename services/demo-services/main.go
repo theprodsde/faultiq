@@ -182,6 +182,26 @@ func adminListHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(states)
 }
 
+// withCORS makes this API callable directly from the browser. The FaultIQ web
+// UI talks to demo-services cross-origin (NEXT_PUBLIC_DEMO_SERVICES_URL), so
+// every response needs Access-Control-Allow-Origin and preflight OPTIONS
+// requests need to be answered before the mux sees them — otherwise the
+// browser rejects the request and the UI reports services as "unreachable".
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "600")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -216,5 +236,5 @@ func main() {
 	log.Printf("demo-services: %d services pre-configured", len(states))
 	log.Printf("demo-services: health at /services/{name}/health")
 	log.Printf("demo-services: control at PUT /admin/services/{name}/status")
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
 }

@@ -41,6 +41,7 @@ const defaultTimeout = 5 * time.Second
 type Signal struct {
 	TenantID           string  `json:"tenantId"`
 	ProjectID          string  `json:"projectId"`
+	Namespace          string  `json:"namespace,omitempty"`
 	Environment        string  `json:"environment"`
 	Service            string  `json:"service"`
 	StatusClass        string  `json:"statusClass"`
@@ -509,6 +510,9 @@ func (p *Poller) checkSynthetic(ctx context.Context, svc servicemap.ServiceEntry
 func (p *Poller) postSignal(ctx context.Context, project servicemap.ProjectEntry, sig Signal) {
 	sig.TenantID = project.Tenant
 	sig.ProjectID = project.ID
+	// The service map declares the graph namespace explicitly. Forwarding it means
+	// the detection engine never has to infer the namespace from the project id.
+	sig.Namespace = project.Namespace
 	sig.Environment = project.Environment
 	sig.Timestamp = time.Now().UnixMilli()
 

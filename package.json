@@ -1,0 +1,11 @@
+{
+  "name": "faultiq-demo-capture",
+  "private": true,
+  "description": "Tooling for regenerating the FaultIQ README screenshots and demo GIF. The product itself is Go + Next.js; this manifest only exists to pin Playwright for scripts/capture-demo.js.",
+  "scripts": {
+    "capture": "node scripts/capture-demo.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

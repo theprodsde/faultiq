@@ -1,12 +1,13 @@
 module github.com/faultiq/detection-engine
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/faultiq/graphclient v0.0.0
 	github.com/jackc/pgx/v5 v5.7.0
 	github.com/prometheus/client_golang v1.16.0
 	github.com/redis/go-redis/v9 v9.6.0
+	golang.org/x/sync v0.19.0
 )
 
 require (
@@ -22,8 +23,7 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/sync v0.2.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 )

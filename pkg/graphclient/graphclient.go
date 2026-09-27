@@ -1,10 +1,12 @@
 package graphclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // Graph is the wire-format service dependency graph shared between graph-manager and consumers.
@@ -67,4 +69,31 @@ func (p *HTTPProvider) GetSubgraph(ctx context.Context, namespace string) (*Grap
 		return nil, err
 	}
 	return &g, nil
+}
+
+// WriteNode records a service's latest observed health on an existing node.
+// It targets the health-only endpoint, so topology fields (name, type, tags)
+// written during onboarding are preserved. Consumers use this to project live
+// signal telemetry (statusClass, latency, error rate) onto the graph so that
+// scoring, the UI, and downstream rankers all read health from one place.
+func (p *HTTPProvider) WriteNode(ctx context.Context, namespace string, node *Node) error {
+	endpoint := fmt.Sprintf("%s/api/v1/graphs/nodes/health?namespace=%s", p.baseURL, url.QueryEscape(namespace))
+	body, err := json.Marshal(node)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("graph-manager returned %d", resp.StatusCode)
+	}
+	return nil
 }

@@ -109,6 +109,37 @@ func serveAPI(mgr *Manager) {
         _ = json.NewEncoder(w).Encode(map[string]string{"id": node.ID, "status": "created"})
     })
     
+    // Health observation endpoint — updates only health fields on an existing
+    // node, leaving topology (name/type/tags) untouched. This is the path
+    // detection-engine uses to project live signal telemetry onto the graph.
+    http.HandleFunc("/api/v1/graphs/nodes/health", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != "POST" && r.Method != "PUT" {
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+        ns := r.URL.Query().Get("namespace")
+        if ns == "" {
+            http.Error(w, "namespace required", http.StatusBadRequest)
+            return
+        }
+        var node graphclient.Node
+        if err := json.NewDecoder(r.Body).Decode(&node); err != nil {
+            http.Error(w, "bad request", http.StatusBadRequest)
+            return
+        }
+        if node.ID == "" {
+            http.Error(w, "id required", http.StatusBadRequest)
+            return
+        }
+        ctx := r.Context()
+        if err := mgr.WriteNodeHealth(ctx, ns, &node); err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+        w.WriteHeader(http.StatusOK)
+        _ = json.NewEncoder(w).Encode(map[string]string{"id": node.ID, "status": "updated"})
+    })
+
     // Write edge endpoint
     http.HandleFunc("/api/v1/graphs/edges", func(w http.ResponseWriter, r *http.Request) {
         if r.Method != "POST" {

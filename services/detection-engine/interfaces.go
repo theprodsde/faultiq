@@ -22,6 +22,13 @@ type GraphProvider interface {
 	GetSubgraph(ctx context.Context, namespace string) (*graphclient.Graph, error)
 }
 
+// NodeWriter is implemented by graph providers that can persist a node's
+// observed health state. It is separate from GraphProvider so read-only
+// providers and test fakes remain valid.
+type NodeWriter interface {
+	WriteNode(ctx context.Context, namespace string, node *graphclient.Node) error
+}
+
 // Store persists incidents and candidates.
 type Store interface {
 	PersistIncident(ctx context.Context, id, project string, detectedAt time.Time) error

@@ -1,13 +1,14 @@
 module github.com/faultiq/api-gateway
 
-go 1.25.0
+go 1.24.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/prometheus/client_golang v1.16.0
 	github.com/redis/go-redis/v9 v9.19.0
-	golang.org/x/time v0.15.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/time v0.13.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -23,9 +24,8 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
-	github.com/rogpeppe/go-internal v1.16.0 // indirect
+	github.com/rogpeppe/go-internal v1.14.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect

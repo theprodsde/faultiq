@@ -101,6 +101,16 @@ export const faultiqApi = baseApi.injectEndpoints({
     getCurrentGraph: build.query<Graph, { projectId: string; environment: string }>({
       query: ({ projectId, environment }) =>
         `/projects/${projectId}/graphs/current?environment=${environment}`,
+      transformResponse: (response: any) => {
+        // graph-manager returns nodes as an object/map — convert to array
+        if (response && typeof response === 'object') {
+          const nodes = response.nodes;
+          if (nodes && !Array.isArray(nodes) && typeof nodes === 'object') {
+            response.nodes = Object.values(nodes);
+          }
+        }
+        return response;
+      },
       providesTags: (_r, _e, { projectId }) => [{ type: "Graph", id: projectId }],
     }),
     listGraphVersions: build.query<{ versions: GraphVersion[] }, { projectId: string; environment: string }>({
