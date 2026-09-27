@@ -9,6 +9,15 @@ set -eu
 
 MIGRATIONS_DIR=${MIGRATIONS_DIR:-/migrations}
 
+# Validate the directory before touching Postgres so a misconfigured
+# MIGRATIONS_DIR fails immediately instead of after waiting on the database.
+# Applying zero migrations looks like success and hides the misconfiguration
+# until something queries a table that was never created.
+if [ ! -d "$MIGRATIONS_DIR" ]; then
+  echo "db-migrate: FATAL no such migrations directory: $MIGRATIONS_DIR" >&2
+  exit 1
+fi
+
 echo "db-migrate: waiting for Postgres..."
 PG_HOST=${PG_HOST:-postgres}
 PG_PORT=${PG_PORT:-5432}
@@ -29,8 +38,8 @@ psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "
   );
 "
 
-# Collect migration files by glob rather than `ls | sort`, so an empty or
-# missing directory degrades cleanly instead of depending on pipeline status.
+# Collect migration files by glob rather than `ls | sort`, so ordering does not
+# depend on pipeline exit status.
 count=0
 applied_count=0
 for f in "$MIGRATIONS_DIR"/*.sql; do
@@ -58,5 +67,10 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
   echo "  applied $ver"
   applied_count=$((applied_count + 1))
 done
+
+if [ "$count" -eq 0 ]; then
+  echo "db-migrate: FATAL no *.sql files found in $MIGRATIONS_DIR" >&2
+  exit 1
+fi
 
 echo "db-migrate: completed ($applied_count applied, $count total migration files)"
