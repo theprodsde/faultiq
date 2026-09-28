@@ -819,14 +819,20 @@ func (d *Detector) persistIncidentAsync(ctx context.Context, incidentID, tenantI
         if node != nil {
             errorRate = node.ErrorRate
         }
+        // The faulting service is the freshest source of its own error rate; the
+        // graph cache trails the write path by up to 30s.
+        if sid == s.Service {
+            errorRate = s.ErrorRate
+        }
         rcaServices[sid] = rcaService{EvidenceCount: 1, Impact: impact, ErrorRate: errorRate}
     }
     if _, ok := rcaServices[s.Service]; !ok {
         node := g.Nodes[s.Service]
         callerCount := len(reverseEdges[s.Service])
         impact := float64(callerCount) / float64(totalNodes)
+        // Always trust the signal over the cache for the signalling service.
         errorRate := s.ErrorRate
-        if node != nil {
+        if node != nil && s.ErrorRate == 0 {
             errorRate = node.ErrorRate
         }
         rcaServices[s.Service] = rcaService{EvidenceCount: 1, Impact: impact, ErrorRate: errorRate}
@@ -1251,6 +1257,13 @@ func (d *Detector) accumulateEvidence(ctx context.Context, incidentID string, s 
         errorRate := 0.0
         if node != nil {
             errorRate = node.ErrorRate
+        }
+        // The service that just reported a signal is the freshest source of its
+        // own error rate. Prefer it over the graph, which is a 30s cache behind
+        // the write path and makes the time-to-confirm depend on how the poller
+        // and cache-refresh timers happen to line up.
+        if c.nodeID == s.Service {
+            errorRate = s.ErrorRate
         }
         callerCount := len(reverseEdges[c.nodeID])
         impact := float64(callerCount) / float64(totalNodes)

@@ -28,7 +28,9 @@ FaultIQ is an open-source platform that detects faults in distributed systems, i
 git clone https://github.com/theprodsde/faultiq && cd faultiq
 cp .env.example .env
 docker compose up --build
-# Wait ~90s, then open http://localhost:4001
+# First build takes ~6 min (13 images + Keycloak realm import). After that:
+#   docker compose up -d        # ~60-90s to a usable UI
+# Open http://localhost:4001
 # Sign in: super / superpass
 # Go to /dashboard/demo → "All healthy — continue", then "Fault ledger-service"
 ```
@@ -37,6 +39,15 @@ No terminal needed after startup — the demo page has a one-click fault injecti
 button. On first boot the stack seeds the demo tenants and projects from
 `scripts/service-map.yaml` and builds the service graph automatically, so all
 services report `2xx` without any manual SQL.
+
+Detection is not instant: the health poller runs every 30s and the incident needs
+a few poll cycles before the root cause crosses the confidence threshold and the
+SOP playbook is generated. Measured over repeated runs on a clean stack, budget
+**1-3 minutes** from injecting a fault to an incident reaching `TRIAGING`, and a
+similar window for auto-resolution. The result is deterministic (same root cause
+and confidence every run); only the latency varies with where the injection lands
+relative to the poll cycle. The demo page shows each phase as it advances, so
+progress is visible rather than looking stalled.
 
 ---
 

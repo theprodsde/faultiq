@@ -36,11 +36,11 @@ API_GATEWAY="http://localhost:8080"
 KEYCLOAK_URL="http://localhost:8081"
 SIGNAL_INGESTION="http://localhost:8085"
 REALM="faultiq"
-CLIENT_ID="faultiq-ui"
+CLIENT_ID="${E2E_CLIENT_ID:-faultiq-ui}"
 
 # Demo user credentials (from realm.json)
-USERNAME="org-admin"
-PASSWORD="orgadminpass"
+USERNAME="${E2E_USERNAME:-org-admin}"
+PASSWORD="${E2E_PASSWORD:-orgadminpass}"
 TENANT="acme-corp"
 
 echo ""

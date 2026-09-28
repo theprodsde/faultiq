@@ -27,7 +27,9 @@ cp .env.example .env
 # 2. Start everything
 docker compose up --build
 
-# 3. Wait for healthy (takes ~90s on first run: Keycloak + Neo4j + image builds)
+# 3. Wait for healthy.
+#    First run (building 13 images + Keycloak realm import): ~6 min.
+#    Subsequent runs: ~60-90s.
 docker compose ps
 
 # 4. Open in browser and sign in with super / superpass
@@ -247,16 +249,23 @@ curl -X PUT http://localhost:8091/admin/services/ledger-service/status \
 
 ### What you should see in the UI during the demo
 
+Timing is driven by the health poller's 30s interval, not by the UI, so allow
+1-3 minutes per transition. The outcome is deterministic; only the latency moves
+with where the injection lands relative to a poll cycle.
+
 ```
-t=0s    Fault injected  →  Incident card appears (OPEN, phase: DETECTING)
-t=5s    Evidence grows  →  Phase badge: NARROWING, confidence bar fills
-t=15s   Confidence 0.75 →  Phase: CONFIRMED → TRIAGING, SOP playbook unlocked
-t=30s   Operator opens  →  Incident detail: phase stepper, step 1 ACTIVE
-        incident detail
-t=40s   Mark step 1 done → Phase: FIXING, step 2 activates
-t=55s   Mark step 3 done → Phase: VERIFYING, "Watching for 2xx from ledger-service"
-t=90s   Service restored → Phase: RESOLVED (automatic), audit record written
+t=0-30s   Fault injected → poller catches it on its next tick
+          Incident opens (OPEN, phase: DETECTING → NARROWING), evidence grows
+t=1-3min   Confidence crosses threshold → CONFIRMED → TRIAGING,
+          SOP playbook generated and unlocked
+          (operator can then open the incident and work the steps;
+           completing them advances FIXING → VERIFYING)
+t=+1-3min  Service restored to 2xx → RESOLVED automatically, audit record written
 ```
+
+If the phase looks stuck at NARROWING, that is the poller interval, not a failure
+— check `docker compose logs health-poller` and watch for repeated
+`FAULT ... → 5xx` lines.
 
 ---
 

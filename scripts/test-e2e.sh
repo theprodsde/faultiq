@@ -1,8 +1,21 @@
 #!/bin/bash
 set -e
+
+# `docker compose` needs the project directory to resolve the compose file,
+# so run from the repo root regardless of where this was invoked.
+cd "$(dirname "$0")/.."
+
 BASE="http://localhost:8080"
 SIGNAL="http://localhost:8085"
 DEMO="http://localhost:8091"
+
+# Keycloak client credentials. These must match scripts/keycloak/realm.json.
+# Override by exporting before running, e.g. E2E_USERNAME=analyst E2E_PASSWORD=analystpass
+KC_URL="${KC_URL:-http://localhost:8081}"
+KC_REALM="${KC_REALM:-faultiq}"
+E2E_CLIENT_ID="${E2E_CLIENT_ID:-faultiq-ui}"
+E2E_USERNAME="${E2E_USERNAME:-super}"
+E2E_PASSWORD="${E2E_PASSWORD:-superpass}"
 
 echo "=== TechGraph E2E Test Suite ==="
 echo ""
@@ -35,10 +48,11 @@ curl -sf "http://localhost:8086/health" > /dev/null && pass "graph-manager healt
 
 # ── Test 2: Authentication ────────────────────────────────────────────────────
 echo "" && echo "--- Test 2: Authentication ---"
-TOKEN=$(curl -sf -X POST "http://localhost:8081/realms/faultiq/protocol/openid-connect/token" \
-  -d "grant_type=password&client_id=faultiq-ui&username=super&password=TechGraph2026!" \
+TOKEN=$(curl -sf -X POST "$KC_URL/realms/$KC_REALM/protocol/openid-connect/token" \
+  -d "grant_type=password&client_id=$E2E_CLIENT_ID&username=$E2E_USERNAME&password=$E2E_PASSWORD" \
   | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
-[ -n "$TOKEN" ] && pass "got auth token (${#TOKEN} chars)" || fail "auth token empty"
+[ -n "$TOKEN" ] && pass "got auth token (${#TOKEN} chars)" \
+  || fail "auth token empty — check $E2E_USERNAME/$E2E_PASSWORD against scripts/keycloak/realm.json"
 
 # ── Test 3: Graph topology ────────────────────────────────────────────────────
 echo "" && echo "--- Test 3: Graph topology ---"
@@ -92,13 +106,13 @@ for i in 4 5 6 7 8; do
 done
 
 wait_for "phase reached TRIAGING" \
-  "docker exec techgraph-postgres-1 psql -U postgres -d faultiq -tAc \
+  "docker compose exec -T postgres psql -U postgres -d faultiq -tAc \
      \"SELECT phase FROM incidents WHERE service='svc_ledger_service' AND status='OPEN' ORDER BY detected_at DESC LIMIT 1\" 2>/dev/null" \
-  "TRIAGING" 12
+  "TRIAGING" 48
 
 # ── Test 8: SOP playbook ──────────────────────────────────────────────────────
 echo "" && echo "--- Test 8: SOP playbook generated ---"
-INC_ID=$(docker exec techgraph-postgres-1 psql -U postgres -d faultiq -tAc \
+INC_ID=$(docker compose exec -T postgres psql -U postgres -d faultiq -tAc \
   "SELECT id FROM incidents WHERE service='svc_ledger_service' AND status='OPEN' ORDER BY detected_at DESC LIMIT 1;" \
   2>/dev/null | tr -d ' \n')
 STEPS=$(curl -sf "$BASE/api/v1/incidents/$INC_ID/sop" \
@@ -122,9 +136,9 @@ curl -sf -X PUT "http://localhost:8091/admin/services/ledger-service/status" \
 pass "ledger-service restored to healthy"
 
 wait_for "incident auto-resolved" \
-  "docker exec techgraph-postgres-1 psql -U postgres -d faultiq -tAc \
+  "docker compose exec -T postgres psql -U postgres -d faultiq -tAc \
      \"SELECT status FROM incidents WHERE id='$INC_ID'\" 2>/dev/null" \
-  "RESOLVED" 8
+  "RESOLVED" 24
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

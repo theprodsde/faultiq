@@ -28,9 +28,9 @@ set -e
 API_GATEWAY="http://localhost:8080"
 KEYCLOAK_URL="http://localhost:8081"
 REALM="faultiq"
-CLIENT_ID="faultiq-ui"
-USERNAME="org-admin"
-PASSWORD="orgadminpass"
+CLIENT_ID="${E2E_CLIENT_ID:-faultiq-ui}"
+USERNAME="${E2E_USERNAME:-org-admin}"
+PASSWORD="${E2E_PASSWORD:-orgadminpass}"
 TENANT="acme-corp"
 PROJECT_ID="proj-payments-prod"
 
