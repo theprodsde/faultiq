@@ -12,6 +12,7 @@ services:
       - AUTH_AUDIENCE=${AUTH_AUDIENCE:-}
       - API_KEY_SECRET=${API_KEY_SECRET:-}    # set this to enable CI/CD auth
       - DEFAULT_TENANT=${DEFAULT_TENANT:-acme-corp}
+      - API_GATEWAY_PORT=${API_GATEWAY_PORT:-8080}
     ports:
       - "${API_GATEWAY_PUBLIC_PORT:-8080}:8080"
     restart: unless-stopped
@@ -157,8 +158,13 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
       interval: 10s
       timeout: 3s
-      retries: 5
-      start_period: 5s
+      retries: 10
+      # Neo4j reports healthy via `neo4j status`, which only proves the process
+      # is up — the Bolt listener may still be warming up. graph-manager opens a
+      # Bolt connection at boot, so it needs a generous grace window or Compose
+      # declares it unhealthy and refuses to start its dependents
+      # (detection-engine, onboarding-worker, code-indexer) on a cold first run.
+      start_period: 45s
 
   signal-ingestion:
     build:
@@ -205,6 +211,12 @@ services:
       - RECOMMENDATION_SERVICE_URL=${RECOMMENDATION_SERVICE_URL:-http://recommendation:8090}
       - SLA_ESCALATION_MINUTES=${SLA_ESCALATION_MINUTES:-30}
       - API_GATEWAY_URL=${API_GATEWAY_URL:-http://api-gateway:8080}
+      - DETECTION_ENGINE_PORT=${DETECTION_ENGINE_PORT:-8084}
+      # Base URL used in webhook "View incident" deep links; set to your real host in prod.
+      - DASHBOARD_BASE_URL=${DASHBOARD_BASE_URL:-http://localhost:${FRONTEND_PUBLIC_PORT:-4001}}
+    ports:
+      # Expose the health/metrics endpoint on the host for debugging and E2E checks.
+      - "${DETECTION_ENGINE_PUBLIC_PORT:-8084}:8084"
     depends_on:
       neo4j:
         condition: service_healthy

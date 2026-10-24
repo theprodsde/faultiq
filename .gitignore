@@ -44,3 +44,7 @@ docs/internal/
 *.pptx
 *.docx
 *.pdf
+
+# ── Machine-specific corporate CA bundle (for TLS-intercepting proxies) ──────
+# Generated per-host by scripts/generate-corporate-ca.sh; never commit.
+scripts/certs/corporate-ca.crt

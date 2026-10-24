@@ -1977,7 +1977,14 @@ func main() {
         }
     }()
 
-    addr := ":8080"
+    // Listen address is configurable for non-compose deployments.
+    // Accepts either ":8080" or "8080". Falls back to the compose default.
+    addr := os.Getenv("API_GATEWAY_PORT")
+    if addr == "" {
+        addr = ":8080"
+    } else if !strings.HasPrefix(addr, ":") {
+        addr = ":" + addr
+    }
     // Wrap the mux with rate limiting — applied to ALL routes
     srv := &http.Server{
         Addr:         addr,

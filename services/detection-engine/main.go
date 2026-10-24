@@ -1626,9 +1626,17 @@ func (d *Detector) sendWebhookNotification(ctx context.Context, incidentID, proj
         return
     }
 
+    // Base URL of the dashboard for the "View incident" deep link. Configurable
+    // so notifications point at the real deployment host, not localhost.
+    dashboardBase := os.Getenv("DASHBOARD_BASE_URL")
+    if dashboardBase == "" {
+        dashboardBase = "http://localhost:4001"
+    }
+    dashboardBase = strings.TrimRight(dashboardBase, "/")
+
     payload := map[string]interface{}{
-        "text": fmt.Sprintf("🚨 *Incident Confirmed* — Root cause: `%s` (confidence: %.0f%%)\nService: `%s` | Project: `%s`\nSOP playbook is ready. <http://localhost:4001/dashboard/incidents/%s|View incident>",
-            rootCause, confidence*100, service, projectID, incidentID),
+        "text": fmt.Sprintf("🚨 *Incident Confirmed* — Root cause: `%s` (confidence: %.0f%%)\nService: `%s` | Project: `%s`\nSOP playbook is ready. <%s/dashboard/incidents/%s|View incident>",
+            rootCause, confidence*100, service, projectID, dashboardBase, incidentID),
         "priority": priority,
         "incident": map[string]interface{}{
             "id":         incidentID,
@@ -1750,8 +1758,16 @@ func main() {
         _, _ = w.Write([]byte("ok"))
     })
     mux.Handle("/metrics", promhttp.Handler())
+    // Listen address is configurable so the service can be repositioned in
+    // non-compose deployments. Accepts either ":8084" or "8084".
+    listenAddr := os.Getenv("DETECTION_ENGINE_PORT")
+    if listenAddr == "" {
+        listenAddr = ":8084"
+    } else if !strings.HasPrefix(listenAddr, ":") {
+        listenAddr = ":" + listenAddr
+    }
     srv := &http.Server{
-        Addr:    ":8084",
+        Addr:    listenAddr,
         Handler: mux,
     }
     log.Printf("detection-engine: health endpoint listening on %s", srv.Addr)

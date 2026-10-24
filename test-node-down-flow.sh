@@ -21,9 +21,19 @@ POSTGRES_DB="faultiq"
 POSTGRES_USER="postgres"
 POSTGRES_PASSWORD="postgres"
 
-# Get a token (for auth-required endpoints)
-# For now using service-to-service auth or public endpoints
-TOKEN=""
+# Get a token for auth-required endpoints (incident status changes are protected).
+# Uses the same Keycloak superadmin credentials as the realm import.
+KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8081}"
+REALM="${REALM:-faultiq}"
+CLIENT_ID="${CLIENT_ID:-faultiq-ui}"
+TOKEN=$(curl -s -X POST "$KEYCLOAK_URL/realms/$REALM/protocol/openid-connect/token" \
+    -d "client_id=$CLIENT_ID" \
+    -d "username=${SUPERADMIN_USERNAME:-super}" \
+    -d "password=${SUPERADMIN_PASSWORD:-superpass}" \
+    -d "grant_type=password" | jq -r '.access_token // empty')
+if [ -z "$TOKEN" ]; then
+    echo "WARNING: could not obtain Keycloak token — status-change steps will fail auth."
+fi
 
 # Helper functions
 log_info() {
@@ -187,6 +197,7 @@ acknowledge_incident() {
     log_info "Acknowledging incident: $incident_id"
     
     local response=$(curl -s -X PUT "$API_URL/api/v1/incidents/$incident_id/status" \
+        -H "Authorization: Bearer $TOKEN" \
         -H 'Content-Type: application/json' \
         -d '{"status": "ACKNOWLEDGED"}')
     
@@ -217,6 +228,7 @@ resolve_incident() {
     log_info "Resolving incident: $incident_id"
     
     curl -s -X PUT "$API_URL/api/v1/incidents/$incident_id/status" \
+        -H "Authorization: Bearer $TOKEN" \
         -H 'Content-Type: application/json' \
         -d '{"status": "RESOLVED"}' > /dev/null
     

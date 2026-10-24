@@ -59,14 +59,16 @@ print_subsection() {
 
 test_passed() {
     echo -e "${GREEN}✓ $1${NC}"
-    ((TESTS_PASSED++))
-    ((TESTS_TOTAL++))
+    # Use assignment form so `set -e` isn't tripped when the pre-increment
+    # value is 0 (post-increment returns the old value as the exit status).
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
 }
 
 test_failed() {
     echo -e "${RED}✗ $1${NC}"
-    ((TESTS_FAILED++))
-    ((TESTS_TOTAL++))
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
 }
 
 test_warning() {
@@ -78,6 +80,21 @@ log_response() {
     echo "$1" | jq . 2>/dev/null || echo "$1"
 }
 
+# b64url_decode decodes a base64url JWT segment portably across GNU and BSD
+# (macOS) base64. It converts base64url to standard base64, pads to a multiple
+# of 4, and tries both `base64 -d` (GNU) and `base64 -D` (BSD).
+b64url_decode() {
+    local data="$1"
+    data="${data//-/+}"
+    data="${data//_/\/}"
+    # Pad with '=' to a multiple of 4.
+    local mod=$(( ${#data} % 4 ))
+    if [ $mod -eq 2 ]; then data="${data}=="
+    elif [ $mod -eq 3 ]; then data="${data}="
+    fi
+    printf '%s' "$data" | base64 -d 2>/dev/null || printf '%s' "$data" | base64 -D 2>/dev/null
+}
+
 print_claims() {
     local token=$1
     local label=${2:-"Token Claims"}
@@ -86,10 +103,9 @@ print_claims() {
     
     # Extract payload
     local payload=$(echo $token | cut -d'.' -f2)
-    local padded="${payload}$(printf '=%.0s' {1..10})"
     
     # Decode and display
-    echo $padded | base64 -D 2>/dev/null | jq . 2>/dev/null || {
+    b64url_decode "$payload" | jq . 2>/dev/null || {
         test_failed "Could not decode JWT payload"
         return 1
     }
@@ -102,8 +118,7 @@ verify_claim() {
     
     # Extract and decode payload
     local payload=$(echo $token | cut -d'.' -f2)
-    local padded="${payload}$(printf '=%.0s' {1..10})"
-    local claims=$(echo $padded | base64 -D 2>/dev/null | jq . 2>/dev/null)
+    local claims=$(b64url_decode "$payload" | jq . 2>/dev/null)
     
     if [ -z "$claims" ]; then
         test_failed "Could not parse JWT claims"
@@ -330,8 +345,7 @@ main() {
     
     # Extract exp claim
     local payload=$(echo $SUPER_TOKEN | cut -d'.' -f2)
-    local padded="${payload}$(printf '=%.0s' {1..10})"
-    local exp=$(echo $padded | base64 -D 2>/dev/null | jq -r '.exp // empty')
+    local exp=$(b64url_decode "$payload" | jq -r '.exp // empty')
     local current_time=$(date +%s)
     local remaining=$((exp - current_time))
     

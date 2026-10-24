@@ -49,6 +49,39 @@ and confidence every run); only the latency varies with where the injection land
 relative to the poll cycle. The demo page shows each phase as it advances, so
 progress is visible rather than looking stalled.
 
+### Changing ports
+
+Every host port lives in `.env` under `HOST PORT MAPPINGS`, and the browser-facing
+`NEXT_PUBLIC_*` URLs are derived from them, so one edit moves the whole stack:
+
+```bash
+sed -i '' 's/^DEMO_SERVICES_PUBLIC_PORT=8091/DEMO_SERVICES_PUBLIC_PORT=8190/' .env
+docker compose up -d --build          # --build matters, see below
+```
+
+> **Rebuild the frontend after changing a port.** `NEXT_PUBLIC_*` values are
+> inlined into the JavaScript bundle at build time, so `docker compose up -d`
+> without `--build` leaves the old URL baked in and the demo page reports the
+> simulated services as unreachable. The page now says so explicitly instead of
+> showing bare "unreachable" rows.
+
+> **`FRONTEND_PUBLIC_PORT` is the exception — leave it at 4001.** Keycloak's
+> `faultiq-ui` client pins its allowed redirect URIs to
+> `http://localhost:4001/*` in `scripts/keycloak/realm.json`, and Keycloak does
+> not accept host/port wildcards there, so a different frontend port fails login
+> with `Invalid parameter: redirect_uri`. If you genuinely need another port, add
+> it to `redirectUris` in that file and recreate Keycloak completely —
+> `docker compose rm -sf keycloak && docker compose up -d keycloak` — because
+> Keycloak imports the realm with `Strategy: IGNORE_EXISTING` and silently keeps
+> the already-imported realm otherwise. Every other port in the file is free to
+> change.
+
+To see what compose resolves to before starting anything:
+
+```bash
+docker compose config | grep -A3 'NEXT_PUBLIC_DEMO_SERVICES_URL'
+```
+
 ---
 
 ## Screenshots

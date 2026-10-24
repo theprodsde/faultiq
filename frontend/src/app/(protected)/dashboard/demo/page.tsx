@@ -69,6 +69,7 @@ export default function DemoPage() {
   const [activeStep, setActiveStep] = useState(1)
   const [stepStatus, setStepStatus] = useState<Record<number, StepStatus>>({ 1: "active" })
   const [healths, setHealths] = useState<Record<string, ServiceHealth>>({})
+  const [demoApiReachable, setDemoApiReachable] = useState(true)
   const [healthLoading, setHealthLoading] = useState(false)
   const [faulting, setFaulting] = useState(false)
   const [healing, setHealing] = useState(false)
@@ -116,6 +117,7 @@ export default function DemoPage() {
   const fetchHealths = async () => {
     setHealthLoading(true)
     const results: Record<string, ServiceHealth> = {}
+    let anyUnreachable = false
     await Promise.all(
       DEMO_SERVICES.map(async (svc) => {
         try {
@@ -126,11 +128,13 @@ export default function DemoPage() {
             results[svc.name] = { status: "down", latency_p95_ms: 0, error_rate: 1, service: svc.name }
           }
         } catch {
+          anyUnreachable = true
           results[svc.name] = { status: "unreachable", latency_p95_ms: 0, error_rate: 1, service: svc.name }
         }
       })
     )
     setHealths(results)
+    setDemoApiReachable(!anyUnreachable)
     setHealthLoading(false)
   }
 
@@ -383,10 +387,20 @@ export default function DemoPage() {
                         <><RefreshCw className="w-3 h-3 mr-1.5" />Refresh</>
                       )}
                     </Button>
+                    {!demoApiReachable && (
+                      <p className="mb-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:text-amber-300 dark:border-amber-700 text-xs">
+                        Could not reach the simulated services at <code className="bg-amber-100 dark:bg-black/30 px-1 rounded">{DEMO_API}</code>.
+                        Check <code className="bg-amber-100 dark:bg-black/30 px-1 rounded">docker compose ps demo-services</code> is running.
+                        If you changed <code className="bg-amber-100 dark:bg-black/30 px-1 rounded">DEMO_SERVICES_PUBLIC_PORT</code>,
+                        rebuild the frontend — this URL is baked in at build time
+                        (<code className="bg-amber-100 dark:bg-black/30 px-1 rounded">docker compose up -d --build frontend</code>).
+                      </p>
+                    )}
                     <Button
                       variant="primary"
                       size="sm"
                       onClick={() => { markDone(1); advance(2) }}
+                      disabled={!demoApiReachable}
                       className="text-xs"
                     >
                       All healthy — continue <ChevronRight className="w-3.5 h-3.5 ml-1" />
